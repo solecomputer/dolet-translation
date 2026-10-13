@@ -1,0 +1,34 @@
+.dolet-lang-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  list-style: none;
+  margin: .5rem 0;
+  padding: 0;
+}
+
+.dolet-lang-choice {
+  display: inline-flex;
+  gap: .4rem;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+  border: 1px solid currentColor;
+  padding: .35rem .6rem;
+  border-radius: .5rem;
+  opacity: .78;
+}
+
+.dolet-lang-choice.is-active {
+  opacity: 1;
+  border-width: 2px;
+}
+
+.dolet-lang-code {
+  opacity: .75;
+}
+
+.dolet-lang-ia {
+  opacity: .7;
+  font-style: italic;
+}

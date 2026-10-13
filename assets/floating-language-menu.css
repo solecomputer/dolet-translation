@@ -1,0 +1,158 @@
+.dolet-floating-selector {
+  --dolet-inline-gutter: max(1rem, env(safe-area-inset-left), env(safe-area-inset-right));
+  position: fixed;
+  z-index: 9999;
+  inset-block-end: max(1rem, env(safe-area-inset-bottom));
+  inset-inline-start: var(--dolet-inline-gutter);
+  max-inline-size: calc(100vw - var(--dolet-inline-gutter) - var(--dolet-inline-gutter));
+  color: #1e1e1e;
+  color: CanvasText;
+  font: normal 1rem/1.4 system-ui, sans-serif;
+}
+
+.dolet-floating-disclosure {
+  position: relative;
+}
+
+.dolet-floating-summary {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  min-block-size: 44px;
+  min-inline-size: 44px;
+  max-inline-size: 100%;
+  box-sizing: border-box;
+  padding: .6rem .8rem;
+  border: 1px solid currentColor;
+  border-radius: .6rem;
+  background: #fff;
+  background: Canvas;
+  color: inherit;
+  box-shadow: 0 .2rem .8rem rgb(0 0 0 / 20%);
+  cursor: pointer;
+}
+
+.dolet-floating-summary-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dolet-floating-prompt {
+  flex: none;
+  font-weight: 600;
+}
+
+.dolet-floating-globe {
+  display: inline-flex;
+  flex: none;
+}
+
+.dolet-floating-globe svg {
+  inline-size: 1.2em;
+  block-size: 1.2em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.dolet-floating-marker {
+  flex: none;
+}
+
+.dolet-floating-disclosure[open] .dolet-floating-marker {
+  transform: rotate(180deg);
+}
+
+.dolet-floating-summary:focus-visible,
+.dolet-floating-choice:focus-visible {
+  outline: 3px solid Highlight;
+  outline-offset: 2px;
+}
+
+.dolet-floating-menu {
+  position: absolute;
+  inset-block-end: calc(100% + .5rem);
+  inset-inline-start: 0;
+  inline-size: max-content;
+  max-inline-size: calc(100vw - var(--dolet-inline-gutter) - var(--dolet-inline-gutter));
+  max-block-size: min(60vh, 24rem, var(--dolet-menu-space, 60vh));
+  overflow: auto;
+  box-sizing: border-box;
+  padding: .35rem;
+  border: 1px solid currentColor;
+  border-radius: .6rem;
+  background: #fff;
+  background: Canvas;
+  color: inherit;
+  box-shadow: 0 .2rem 1rem rgb(0 0 0 / 24%);
+}
+
+.dolet-floating-disclosure[data-dolet-opening="down"] .dolet-floating-menu {
+  inset-block-start: calc(100% + .5rem);
+  inset-block-end: auto;
+}
+
+.dolet-floating-list {
+  display: grid;
+  gap: .15rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dolet-floating-choice {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-block-size: 44px;
+  box-sizing: border-box;
+  padding: .55rem .7rem;
+  border-radius: .35rem;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.dolet-floating-code {
+  font: inherit;
+  font-size: .78em;
+  opacity: .68;
+}
+
+.dolet-floating-endonym {
+  font-weight: 600;
+}
+
+.dolet-floating-ia {
+  font-size: .78em;
+  opacity: .72;
+}
+
+.dolet-floating-choice:hover,
+.dolet-floating-choice.is-active {
+  background: #1e1e1e;
+  color: #fff;
+  background: SelectedItem;
+  color: SelectedItemText;
+}
+
+@media (max-width: 480px) {
+  .dolet-floating-selector {
+    --dolet-inline-gutter: max(.75rem, env(safe-area-inset-left), env(safe-area-inset-right));
+    inset-block-end: max(.75rem, env(safe-area-inset-bottom));
+    inset-inline-start: var(--dolet-inline-gutter);
+    max-inline-size: calc(100vw - var(--dolet-inline-gutter) - var(--dolet-inline-gutter));
+  }
+
+  .dolet-floating-menu {
+    max-inline-size: calc(100vw - var(--dolet-inline-gutter) - var(--dolet-inline-gutter));
+  }
+
+  .dolet-floating-choice {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+}

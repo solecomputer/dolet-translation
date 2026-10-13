@@ -1,0 +1,15 @@
+.dolet-debug {
+  margin: .75rem 0;
+  padding: .5rem .75rem;
+  border: 1px dashed #c33;
+  font: 13px/1.35 system-ui, sans-serif;
+  background: #fff6f6;
+}
+
+.dolet-start {
+  border-color: #c33;
+}
+
+.dolet-end {
+  border-color: #3c3;
+}

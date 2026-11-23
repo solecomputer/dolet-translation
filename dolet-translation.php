@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       Sole Translation
- * Plugin URI:        https://sole.computer/
+ * Plugin URI:        https://github.com/solecomputer/dolet-translation
  * Description:       Context-aware AI translation for WordPress via SOLE Engine.
  * Version:           1.0.2
  * Requires at least: 6.5

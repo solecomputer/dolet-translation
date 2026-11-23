@@ -20,6 +20,7 @@ if (! defined('ABSPATH')) {
    
 
 require_once __DIR__ . '/contracts.php';
+require_once __DIR__ . '/config.php';
 
 
                             
@@ -39,6 +40,13 @@ interface Data_UniversalTableL1Interface
 {
                                                     
     public function getTableName(): string;
+
+                                                                                    
+                                                                         
+                                                                                            
+                                                                                              
+       
+    public function assertTextValuesRepresentable(array $values): void;
 
                                                                                    
     public function ensureSchema(): void;
@@ -68,6 +76,15 @@ interface Data_UniversalTableL1Interface
     public function updateById(int $id, array $data): bool;
 
        
+                                                                             
+                                           
+      
+                                       
+                                             
+       
+    public function updateByIdWhen(int $id, array $data, array $conditions): int;
+
+       
                                           
       
                                                                            
@@ -94,6 +111,19 @@ interface Data_UniversalTableL1Interface
                                         
        
     public function selectManyByConditions(array $conditions, int $limit = 0): array;
+
+       
+                                                                 
+      
+                                             
+                                        
+       
+    public function selectManyDueByConditions(
+        array $conditions,
+        string $epochColumn,
+        int $nowEpoch,
+        int $limit
+    ): array;
 
        
                                                                                      
@@ -153,11 +183,21 @@ final class Data_HumanLockedException extends Data_Exception
 {
 }
 
-final class Data_InvalidArgumentException extends Data_Exception
+class Data_InvalidArgumentException extends Data_Exception
 {
 }
 
-final class Data_RowCorruptException extends Data_Exception
+                                                                                
+final class Data_PairRepresentationRejectedException extends Data_InvalidArgumentException implements Data_PairRepresentationRejectedExceptionInterface
+{
+}
+
+class Data_RowCorruptException extends Data_Exception
+{
+}
+
+                                                                            
+final class Data_StoredIdentityMismatchException extends Data_RowCorruptException implements Data_StoredIdentityMismatchExceptionInterface
 {
 }
 
@@ -197,6 +237,9 @@ final class Data_UniversalTableL1 implements Data_UniversalTableL1Interface
                                   
     private array $timeColumns;
 
+                                                                             
+    private array $textColumnLengths = [];
+
     private \wpdb $wpdb;
 
 
@@ -221,99 +264,175 @@ final class Data_UniversalTableL1 implements Data_UniversalTableL1Interface
         return $this->tableName;
     }
 
+    public function assertTextValuesRepresentable(array $values): void
+    {
+        $selects = [];
+        $arguments = [];
+        foreach ($values as $column => $value) {
+            if (!isset($this->allowedColumns[$column])) {
+                throw new Data_PairRepresentationRejectedException('TM identity column is unavailable.');
+            }
+            if (!isset($this->textColumnLengths[$column])) {
+                $table = \str_replace('`', '``', $this->tableName);
+                $metadata = $this->wpdb->get_row($this->wpdb->prepare(
+                    'SHOW FULL COLUMNS FROM `' . $table . '` WHERE Field = %s', $column
+                ), ARRAY_A);
+                if ($this->wpdb->last_error !== '') {
+                    throw new Data_DbException('TM identity metadata query failed.');
+                }
+                if (!\is_array($metadata)
+                    || ($metadata['Collation'] ?? null) !== 'utf8mb4_bin'
+                    || !\is_string($metadata['Type'] ?? null)
+                    || \preg_match('/\Avarchar\(([1-9][0-9]*)\)\z/', $metadata['Type'], $match) !== 1
+                ) {
+                    throw new Data_PairRepresentationRejectedException('TM identity column capacity is unproven.');
+                }
+                $this->textColumnLengths[$column] = (int)$match[1];
+            }
+            $limit = $this->textColumnLengths[$column];
+                                                                                              
+            $fits = \strlen($value) <= 4 * $limit
+                ? \preg_match('/\A.{0,' . $limit . '}\z/us', $value)
+                : 0;
+            if ($fits === false) {
+                throw new Data_PairRepresentationRejectedException('TM identity UTF-8 representation is unproven.');
+            }
+            if ($fits !== 1) {
+                throw new Data_PairRepresentationRejectedException('TM identity exceeds exact column representation.');
+            }
+            $selects[] = 'HEX(CONVERT(%s USING utf8mb4)) AS v' . \count($arguments);
+            $arguments[] = $value;
+        }
+        if ($arguments === []) {
+            return;
+        }
+                                                                                  
+        $wire = $this->wpdb->get_row($this->wpdb->prepare(
+            'SELECT ' . \implode(', ', $selects), $arguments
+        ), ARRAY_A);
+        if ($this->wpdb->last_error !== '') {
+            throw new Data_DbException('TM identity transport query failed.');
+        }
+        foreach ($arguments as $i => $value) {
+            if (!\is_array($wire) || ($wire['v' . $i] ?? null) !== \strtoupper(\bin2hex($value))) {
+                throw new Data_PairRepresentationRejectedException('TM identity SQL transport is unproven.');
+            }
+        }
+    }
+
     public function ensureSchema(): void
     {
-                                                                        
-        $table = $this->tableName;
+        $table = \str_replace('`', '``', $this->tableName);
+                                                                             
+        $existing = $this->wpdb->get_var($this->wpdb->prepare(
+            'SHOW TABLES LIKE %s', $this->wpdb->esc_like($this->tableName)
+        ));
+        if ($this->wpdb->last_error !== '') {
+            throw new Data_DbException('Cannot inspect translation-memory schema.');
+        }
+        if ($existing !== null) {
+            if ($this->wpdb->query('SELECT 1 FROM `' . $table . '` LIMIT 0') === false) {
+                throw new Data_DbException('Cannot read the existing translation-memory table.');
+            }
+            return;
+        }
+                                                                                         
+        if (($GLOBALS['wpdb'] ?? null) !== $this->wpdb) {
+            throw new Data_DbException('Schema creation requires the active WordPress database.');
+        }
+        if (!\function_exists('dbDelta')) {
+            require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        }
+                                                                                                    
+        $charsetCollate = $this->wpdb->get_charset_collate();
 
         $sql = "
-CREATE TABLE IF NOT EXISTS `{$table}` (
-  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  `scheme_id` VARCHAR(64) NOT NULL,
+CREATE TABLE `{$table}` (
+  id bigint UNSIGNED NOT NULL AUTO_INCREMENT,
+  scheme_id varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
 
-  `unique_hash_1` VARBINARY(64),
-  `unique_hash_2` VARBINARY(64),
-  `unique_hash_3` VARBINARY(64),
-  `unique_hash_4` VARBINARY(64),
-  `unique_hash_5` VARBINARY(64),
-  `unique_hash_6` VARBINARY(64),
-  `unique_hash_7` VARBINARY(64),
+  unique_hash_1 varbinary(64),
+  unique_hash_2 varbinary(64),
+  unique_hash_3 varbinary(64),
+  unique_hash_4 varbinary(64),
+  unique_hash_5 varbinary(64),
+  unique_hash_6 varbinary(64),
+  unique_hash_7 varbinary(64),
 
-  `hash_1` VARBINARY(64),
-  `hash_2` VARBINARY(64),
-  `hash_3` VARBINARY(64),
-  `hash_4` VARBINARY(64),
-  `hash_5` VARBINARY(64),
-  `hash_6` VARBINARY(64),
-  `hash_7` VARBINARY(64),
+  hash_1 varbinary(64),
+  hash_2 varbinary(64),
+  hash_3 varbinary(64),
+  hash_4 varbinary(64),
+  hash_5 varbinary(64),
+  hash_6 varbinary(64),
+  hash_7 varbinary(64),
 
-  `bool_1` TINYINT(1) UNSIGNED,
-  `bool_2` TINYINT(1) UNSIGNED,
-  `bool_3` TINYINT(1) UNSIGNED,
-  `bool_4` TINYINT(1) UNSIGNED,
-  `bool_5` TINYINT(1) UNSIGNED,
-  `bool_6` TINYINT(1) UNSIGNED,
-  `bool_7` TINYINT(1) UNSIGNED,
+  bool_1 tinyint(1) UNSIGNED,
+  bool_2 tinyint(1) UNSIGNED,
+  bool_3 tinyint(1) UNSIGNED,
+  bool_4 tinyint(1) UNSIGNED,
+  bool_5 tinyint(1) UNSIGNED,
+  bool_6 tinyint(1) UNSIGNED,
+  bool_7 tinyint(1) UNSIGNED,
 
-  `int_1` BIGINT,
-  `int_2` BIGINT,
-  `int_3` BIGINT,
-  `int_4` BIGINT,
-  `int_5` BIGINT,
-  `int_6` BIGINT,
-  `int_7` BIGINT,
+  int_1 bigint,
+  int_2 bigint,
+  int_3 bigint,
+  int_4 bigint,
+  int_5 bigint,
+  int_6 bigint,
+  int_7 bigint,
 
-  `float_1` DOUBLE,
-  `float_2` DOUBLE,
-  `float_3` DOUBLE,
-  `float_4` DOUBLE,
-  `float_5` DOUBLE,
-  `float_6` DOUBLE,
-  `float_7` DOUBLE,
+  float_1 double,
+  float_2 double,
+  float_3 double,
+  float_4 double,
+  float_5 double,
+  float_6 double,
+  float_7 double,
 
-  `short_string_1` VARCHAR(191),
-  `short_string_2` VARCHAR(191),
-  `short_string_3` VARCHAR(191),
-  `short_string_4` VARCHAR(191),
-  `short_string_5` VARCHAR(191),
-  `short_string_6` VARCHAR(191),
-  `short_string_7` VARCHAR(191),
+  short_string_1 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  short_string_2 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  short_string_3 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  short_string_4 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  short_string_5 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  short_string_6 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  short_string_7 varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
 
-  `long_string_1` LONGTEXT,
-  `long_string_2` LONGTEXT,
-  `long_string_3` LONGTEXT,
-  `long_string_4` LONGTEXT,
-  `long_string_5` LONGTEXT,
-  `long_string_6` LONGTEXT,
-  `long_string_7` LONGTEXT,
+  long_string_1 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  long_string_2 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  long_string_3 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  long_string_4 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  long_string_5 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  long_string_6 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  long_string_7 longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
 
-  `timestamp_1` BIGINT UNSIGNED,
-  `timestamp_2` BIGINT UNSIGNED,
-  `timestamp_3` BIGINT UNSIGNED,
-  `timestamp_4` BIGINT UNSIGNED,
-  `timestamp_5` BIGINT UNSIGNED,
-  `timestamp_6` BIGINT UNSIGNED,
-  `timestamp_7` BIGINT UNSIGNED,
+  timestamp_1 bigint UNSIGNED,
+  timestamp_2 bigint UNSIGNED,
+  timestamp_3 bigint UNSIGNED,
+  timestamp_4 bigint UNSIGNED,
+  timestamp_5 bigint UNSIGNED,
+  timestamp_6 bigint UNSIGNED,
+  timestamp_7 bigint UNSIGNED,
 
-  `creation_date` BIGINT UNSIGNED,
-  `last_modification_date` BIGINT UNSIGNED,
-  `last_review_date` BIGINT UNSIGNED,
-  `expiration_date` BIGINT UNSIGNED,
+  creation_date bigint UNSIGNED,
+  last_modification_date bigint UNSIGNED,
+  last_review_date bigint UNSIGNED,
+  expiration_date bigint UNSIGNED,
 
-  PRIMARY KEY (`id`),
+  PRIMARY KEY  (id),
   UNIQUE KEY `uidx_scheme_unique_hash_1` (`scheme_id`,`unique_hash_1`),
   KEY `idx_scheme_id` (`scheme_id`),
   KEY `idx_expiration_date` (`expiration_date`),
   KEY `idx_neighbor_xy` (`scheme_id`,`short_string_1`,`short_string_2`,`hash_1`,`hash_2`),
   KEY `idx_neighbor_yz` (`scheme_id`,`short_string_1`,`short_string_2`,`hash_2`,`hash_3`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+) ENGINE=InnoDB {$charsetCollate};
 ";
 
 
-        $ok = $this->wpdb->query($sql);
-        if ($ok === false) {
-
-            throw new Data_DbException('ensureSchema failed: ' . (string) $this->wpdb->last_error);
+        \dbDelta($sql);
+        if ($this->wpdb->query('SELECT 1 FROM `' . $table . '` LIMIT 0') === false) {
+            throw new Data_DbException('Translation-memory schema creation failed.');
         }
     }
 
@@ -419,6 +538,49 @@ CREATE TABLE IF NOT EXISTS `{$table}` (
 
                                                                                                     
         return true;
+    }
+
+    public function updateByIdWhen(int $id, array $data, array $conditions): int
+    {
+        if ($id <= 0 || $conditions === []) {
+            throw new Data_InvalidArgumentException('updateByIdWhen() requires an id and conditions.');
+        }
+        $data[Data_UniversalTableL1_Constants::COL_LAST_MODIFICATION_DATE] = \time();
+        $filtered = $this->filterAndNormalizeData($data);
+        unset($filtered[Data_UniversalTableL1_Constants::COL_ID]);
+        $conditionData = $this->filterAndNormalizeData($conditions);
+        unset($conditionData[Data_UniversalTableL1_Constants::COL_ID]);
+        if ($filtered === [] || $conditionData === []) {
+            throw new Data_InvalidArgumentException('updateByIdWhen() received no supported columns.');
+        }
+
+        $sets = [];
+        $where = ['`' . Data_UniversalTableL1_Constants::COL_ID . '` = %d'];
+        $values = [];
+        foreach ($filtered as $column => $value) {
+            if ($value === null) {
+                $sets[] = '`' . $column . '` = NULL';
+            } else {
+                $sets[] = '`' . $column . '` = ' . ($this->columnFormats[$column] ?? '%s');
+                $values[] = $value;
+            }
+        }
+        $values[] = $id;
+        foreach ($conditionData as $column => $value) {
+            if ($value === null) {
+                $where[] = '`' . $column . '` IS NULL';
+            } else {
+                $where[] = '`' . $column . '` = ' . ($this->columnFormats[$column] ?? '%s');
+                $values[] = $value;
+            }
+        }
+        $sql = 'UPDATE `' . $this->tableName . '` SET ' . implode(', ', $sets)
+            . ' WHERE ' . implode(' AND ', $where);
+        $rows = $this->wpdb->query($this->wpdb->prepare($sql, $values));
+        if ($rows === false) {
+            throw new Data_DbException('updateByIdWhen failed: ' . (string)$this->wpdb->last_error);
+        }
+        return (int)$rows;
     }
 
     public function deleteById(int $id): bool
@@ -533,7 +695,7 @@ CREATE TABLE IF NOT EXISTS `{$table}` (
 
         $rows = $this->wpdb->get_results($prepared, ARRAY_A);
 
-        if ($rows === null && $this->wpdb->last_error !== '') {
+        if ($this->wpdb->last_error !== '') {
 
             throw new Data_DbException('selectManyByConditions failed: ' . (string) $this->wpdb->last_error);
         }
@@ -542,6 +704,49 @@ CREATE TABLE IF NOT EXISTS `{$table}` (
             return [];
         }
 
+                                                   
+        return $rows;
+    }
+
+    public function selectManyDueByConditions(
+        array $conditions,
+        string $epochColumn,
+        int $nowEpoch,
+        int $limit
+    ): array {
+        if (!isset($this->allowedColumns[$epochColumn]) || !isset($this->timeColumns[$epochColumn])) {
+            throw new Data_InvalidArgumentException('selectManyDueByConditions(): invalid epoch column.');
+        }
+        $whereClauses = [];
+        $values = [];
+        foreach ($conditions as $column => $value) {
+            if (!isset($this->allowedColumns[$column])) {
+                continue;
+            }
+            if ($value === null) {
+                $whereClauses[] = '`' . $column . '` IS NULL';
+            } else {
+                $whereClauses[] = '`' . $column . '` = ' . ($this->columnFormats[$column] ?? '%s');
+                $values[] = $this->normalizeSingleValue($column, $value);
+            }
+        }
+        if ($whereClauses === []) {
+            throw new Data_InvalidArgumentException('selectManyDueByConditions() received no valid conditions.');
+        }
+        $whereClauses[] = '(`' . $epochColumn . '` IS NULL OR `' . $epochColumn . '` <= %d)';
+        $values[] = $nowEpoch;
+        $sql = 'SELECT * FROM `' . $this->tableName . '` WHERE ' . implode(' AND ', $whereClauses)
+            . ' ORDER BY `' . Data_UniversalTableL1_Constants::COL_ID . '` ASC';
+        if ($limit > 0) {
+            $sql .= ' LIMIT ' . $limit;
+        }
+        $rows = $this->wpdb->get_results($this->wpdb->prepare($sql, $values), ARRAY_A);
+        if ($this->wpdb->last_error !== '') {
+            throw new Data_DbException('selectManyDueByConditions failed: ' . (string)$this->wpdb->last_error);
+        }
+        if (!is_array($rows)) {
+            return [];
+        }
                                                    
         return $rows;
     }
@@ -930,40 +1135,32 @@ final class Data_UniversalTableL1_Constants
                                                                         
                                                                      
   
-                                                                                
+                                                                 
    
 final class Data_UniversalTableL1_Tools
 {
        
                                                                              
       
-                                               
-      
-                                 
-                      
-                                                                    
-           
+                                                                        
+                                                                              
        
     public static function maybeDropOnUninstall(): void
     {
-        $shouldDelete = (bool) get_option(
+        $shouldDelete = Config_OptionValue::boolean(\get_option(
             Data_UniversalTableL1_Options::OPTION_DELETE_ON_UNINSTALL,
             false
-        );
+        ));
 
         if (!$shouldDelete) {
             return;
         }
 
-        self::dropTableSilently();
+        self::dropTableOrFail();
         self::deleteOptionsSilently();
     }
 
-       
-                                                                       
-      
-                                                                    
-       
+                                                                              
     private static function deleteOptionsSilently(): void
     {
         $options = [
@@ -981,6 +1178,15 @@ final class Data_UniversalTableL1_Tools
             Config_DiagnosticsOptionNames::LAST_ERROR,
             Config_DiagnosticsOptionNames::LAST_ERROR_AT,
             Config_DiagnosticsOptionNames::LAST_SUCCESS,
+            Config_DiagnosticsOptionNames::ROOT_INCIDENT,
+            Config_DiagnosticsOptionNames::MUTATION_LEASE,
+            Config_PendingRegistrationOptionNames::DAILY_BUDGET,
+            Config_HygieneOptionNames::LAST_RUN,
+            Config_HygieneOptionNames::LAST_COUNTS,
+            Config_WorkerOptionNames::LEASE,
+            Translation_RuntimeOptionNames::INLINE_PHRASE_REJECTIONS,
+            Data_UniversalTableL1_Options::OPTION_DELETE_ON_UNINSTALL,
+            'widget_dolet_lang_menu',
         ];
 
         foreach ($options as $option) {
@@ -994,21 +1200,33 @@ final class Data_UniversalTableL1_Tools
                                                                            
                                                    
        
-    public static function dropTableSilently(): void
+    private static function dropTableOrFail(): void
     {
         global $wpdb;
 
         try {
             $table = $wpdb->prefix . Data_UniversalTableL1_Constants::TABLE_SLUG;
 
-            $wpdb->query("DROP TABLE IF EXISTS `{$table}`");
+            $result = $wpdb->query("DROP TABLE IF EXISTS `{$table}`");
+            if ($result === false) {
+                throw new Data_DbException('Translation-memory table DROP failed.');
+            }
         } catch (\Throwable $e) {
             if (defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
                 error_log(
-                    '[Dolet WP] Data_UniversalTableL1_Tools::dropTableSilently error: ' .
+                    '[Dolet WP] Data_UniversalTableL1_Tools::dropTableOrFail error: ' .
                     $e->getMessage()
                 );
             }
+            (new Config_DiagnosticsStore())->recordError(
+                'uninstall_drop_failed',
+                'Dolet data deletion failed; the translation-memory table and saved settings were kept.'
+            );
+            throw new \RuntimeException(
+                'Dolet data deletion failed; the translation-memory table and saved settings were kept.',
+                0,
+                $e
+            );
         }
     }
 }
@@ -1100,9 +1318,10 @@ interface Data_L2ContextWindowStoreInterface
        
                                                                                        
       
-                                                                                    
-                                                                                  
-                         
+                                                                                               
+                                                                           
+      
+                                                            
        
     public function findExactOrNull(
         Data_ContextWindowInterface $w,
@@ -1137,8 +1356,10 @@ interface Data_L2ContextWindowStoreInterface
                                    
                                    
       
-                                                                               
-                                                                                
+                                                                        
+                                                                                         
+      
+                                                            
       
                                             
        
@@ -1179,6 +1400,10 @@ interface Data_L2ContextWindowStoreInterface
         int $nowEpoch
     ): void;
 
+    public function recordRetryFailureById(int $id, string $error, int $nowEpoch): int;
+
+    public function clearRetryStateById(int $id): void;
+
     public function setHumanLockedById(int $id, bool $value, int $nowEpoch): void;
 
     public function deleteById(int $id): void;
@@ -1190,7 +1415,11 @@ interface Data_L2ContextWindowStoreInterface
 
        
                                                                           
-                                                                                
+                                                                                     
+                                                                                      
+                                                                                  
+      
+                                                            
       
                                             
        
@@ -1345,7 +1574,10 @@ interface Data_SchemeInterface
 
        
                                                      
-                                                                                          
+                                                                     
+                                                                              
+      
+                                                            
       
                                       
        
@@ -1445,8 +1677,8 @@ final class Data_ContextWindow implements Data_ContextWindowInterface
                                                                 
                                 
                                              
-                                                                               
-                                           
+                                                                                   
+                                                                                             
                                                                           
    
 final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
@@ -1456,10 +1688,34 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
 
     public function __construct(
         ?Data_UniversalTableL1Interface $l1 = null,
-        ?Data_SchemeInterface $scheme = null
+        ?Data_SchemeInterface $scheme = null,
+        private ?Diagnostics_StoreInterface $identityDiagnostics = null
     ) {
         $this->l1 = $l1 ?? new Data_UniversalTableL1();
         $this->scheme = $scheme ?? new Data_SchemeV1();
+    }
+
+    private function assertCodesRepresentable(string $source, string $target): void
+    {
+        $this->l1->assertTextValuesRepresentable([
+            Data_UniversalTableL1_Constants::COL_SHORT_STRING_1 => $source,
+            Data_UniversalTableL1_Constants::COL_SHORT_STRING_2 => $target,
+        ]);
+    }
+
+    private function reportRetainedIdentities(int $count): void
+    {
+        if ($count === 0) {
+            return;
+        }
+                                                                                      
+        if ($this->identityDiagnostics === null) {
+            throw new Data_StoredIdentityMismatchException('TM window contains retained identity mismatches.');
+        }
+        $this->identityDiagnostics->recordError(
+            'tm_lookup_failed',
+            $count . ' stored identity row(s) retained without mutation.'
+        );
     }
 
     public function ensureSchema(): void
@@ -1482,6 +1738,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
         int $nowEpoch
     ): ?Data_RowRecordInterface {
         $key = $this->scheme->buildRowKey($w, $pair);
+        $this->assertCodesRepresentable($key->srcLang(), $key->tgtLang());
 
         $conditions = [
             Data_UniversalTableL1_Constants::COL_SCHEME_ID      => $key->schemeId(),
@@ -1535,6 +1792,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
 
 
         $key = $this->scheme->buildRowKey($w, $pair);
+        $this->assertCodesRepresentable($key->srcLang(), $key->tgtLang());
 
         $conditions = [
             Data_UniversalTableL1_Constants::COL_SCHEME_ID      => $key->schemeId(),
@@ -1554,7 +1812,12 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
         $draft      = $this->scheme->makeRowDraft($w, $pair);
         $expiration = $this->scheme->computeExpirationEpoch($nowEpoch);
 
-        $id = $this->l1->insert($draft->toL1InsertData($nowEpoch, $expiration));
+        $data = $draft->toL1InsertData($nowEpoch, $expiration);
+        $this->assertCodesRepresentable(
+            (string)$data[Data_UniversalTableL1_Constants::COL_SHORT_STRING_1],
+            (string)$data[Data_UniversalTableL1_Constants::COL_SHORT_STRING_2]
+        );
+        $id = $this->l1->insert($data);
         if ($id > 0) {
             return $id;
         }
@@ -1580,6 +1843,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
         $schemeId = $this->scheme->schemeId();
         $srcLang  = $pair->getSourceLanguage()->getCode();
         $tgtLang  = $pair->getTargetLanguage()->getCode();
+        $this->assertCodesRepresentable($srcLang, $tgtLang);
 
         $rowsById = [];
 
@@ -1741,9 +2005,56 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
             $data[Data_UniversalTableL1_Constants::COL_LONG_STRING_5] = $metaJsonOrNull;
         }
 
-        $ok = $this->l1->updateById($id, $data);
-        if (!$ok) {
+        if (!$humanTouched) {
+            $affected = $this->l1->updateByIdWhen($id, $data, [
+                Data_UniversalTableL1_Constants::COL_BOOL_2 => 0,
+            ]);
+            if ($affected !== 1) {
+                $current = $this->findByIdOrNull($id);
+                if ($current === null) {
+                    throw new Data_InvalidArgumentException('Row not found id=' . $id);
+                }
+                if ($current->isHumanLocked()) {
+                    throw new Data_HumanLockedException('Row was human-locked during automatic update.');
+                }
+            }
+            return;
+        }
+
+        if (!$this->l1->updateById($id, $data)) {
             throw new Data_DbException('updateTranslationById(): update returned false.');
+        }
+    }
+
+    public function recordRetryFailureById(int $id, string $error, int $nowEpoch): int
+    {
+        $row = $this->l1->selectOneByConditions([
+            Data_UniversalTableL1_Constants::COL_ID => $id,
+        ]);
+        if ($row === null) {
+            return 0;
+        }
+        $failures = (int)($row[Data_UniversalTableL1_Constants::COL_INT_1] ?? 0) + 1;
+        $delays = [60, 300, 900, 3599];
+        $delay = $delays[min($failures - 1, count($delays) - 1)];
+        if (!$this->l1->updateById($id, [
+            Data_UniversalTableL1_Constants::COL_INT_1 => $failures,
+            Data_UniversalTableL1_Constants::COL_TIMESTAMP_2 => $nowEpoch + $delay,
+            Data_UniversalTableL1_Constants::COL_SHORT_STRING_3 => substr($error, 0, 191),
+        ])) {
+            throw new Data_DbException('recordRetryFailureById(): update returned false.');
+        }
+        return $failures;
+    }
+
+    public function clearRetryStateById(int $id): void
+    {
+        if (!$this->l1->updateById($id, [
+            Data_UniversalTableL1_Constants::COL_INT_1 => null,
+            Data_UniversalTableL1_Constants::COL_TIMESTAMP_2 => null,
+            Data_UniversalTableL1_Constants::COL_SHORT_STRING_3 => null,
+        ])) {
+            throw new Data_DbException('clearRetryStateById(): update returned false.');
         }
     }
 
@@ -1781,6 +2092,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
         Language_PairInterface $pair
     ): void {
         $key = $this->scheme->buildRowKey($w, $pair);
+        $this->assertCodesRepresentable($key->srcLang(), $key->tgtLang());
 
         $conditions = [
             Data_UniversalTableL1_Constants::COL_SCHEME_ID      => $key->schemeId(),
@@ -1811,6 +2123,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
         $schemeId = $this->scheme->schemeId();
         $srcLang  = $pair->getSourceLanguage()->getCode();
         $tgtLang  = $pair->getTargetLanguage()->getCode();
+        $this->assertCodesRepresentable($srcLang, $tgtLang);
 
         $conditions = [
             Data_UniversalTableL1_Constants::COL_SCHEME_ID      => $schemeId,
@@ -1819,11 +2132,24 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
             Data_UniversalTableL1_Constants::COL_BOOL_1         => 0,
         ];
 
-        $rows = $this->l1->selectManyByConditions($conditions, $limit);
+                                                                           
+                                                                        
+        $rows = $this->l1->selectManyDueByConditions(
+            $conditions,
+            Data_UniversalTableL1_Constants::COL_TIMESTAMP_2,
+            \time(),
+            $limit
+        );
 
         $out = [];
+        $retainedIdentities = 0;
         foreach ($rows as $row) {
-            $record = $this->scheme->hydrateRecordFromL1Row($row);
+            try {
+                $record = $this->scheme->hydrateRecordFromL1Row($row);
+            } catch (Data_StoredIdentityMismatchExceptionInterface) {
+                $retainedIdentities++;
+                continue;
+            }
             if ($record === null) {
                 $id = isset($row[Data_UniversalTableL1_Constants::COL_ID])
                     ? (int) $row[Data_UniversalTableL1_Constants::COL_ID]
@@ -1836,6 +2162,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
             $out[] = $record;
         }
 
+        $this->reportRetainedIdentities($retainedIdentities);
         return $out;
     }
 
@@ -1863,6 +2190,7 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
 
         $deletedCorrupted = 0;
         $reregistered     = 0;
+        $retainedIdentities = 0;
 
         if ($corruptedScanLimit > 0) {
             $rows = $this->l1->selectManyByConditions(
@@ -1880,7 +2208,12 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
                     continue;
                 }
 
-                $hydrated = $this->scheme->hydrateRecordFromL1Row($row);
+                try {
+                    $hydrated = $this->scheme->hydrateRecordFromL1Row($row);
+                } catch (Data_StoredIdentityMismatchExceptionInterface) {
+                    $retainedIdentities++;
+                    continue;
+                }
                 if ($hydrated !== null) {
                     continue;
                 }
@@ -1940,7 +2273,11 @@ final class Data_L2TriadV1Store implements Data_L2TriadV1StoreInterface
             }
         }
 
+        if ($this->identityDiagnostics !== null) {
+            $this->reportRetainedIdentities($retainedIdentities);
+        }
         return [
+            'identity_mismatch_retained' => $retainedIdentities,
             'deleted_generic'    => (int) $deletedGeneric,
             'deleted_pending'    => (int) $deletedPending,
             'deleted_corrupted'  => (int) $deletedCorrupted,
@@ -2274,9 +2611,7 @@ final class Data_SchemeV1 implements Data_SchemeInterface
         $hy = $w->getCoreForHash();
         $hz = $w->getNextForHash();
 
-        $triad = self::hashStr(
-            $scheme . '|' . $src . '|' . $tgt . '|' . ($hx ?? '') . '|' . $hy . '|' . ($hz ?? '')
-        );
+        $triad = self::identityHash($scheme, $src, $tgt, $hx, $hy, $hz);
 
         return new Data_RowKey($scheme, $src, $tgt, $hx, $hy, $hz, $triad);
     }
@@ -2350,6 +2685,11 @@ final class Data_SchemeV1 implements Data_SchemeInterface
         $hx = (is_string($hx) && $hx !== '') ? $hx : null;
         $hz = (is_string($hz) && $hz !== '') ? $hz : null;
 
+                                                                                                      
+        if ($triad !== self::identityHash($scheme, $src, $tgt, $hx, $hy, $hz)) {
+            throw new Data_StoredIdentityMismatchException('TM stored pair identity does not match its existing row hash.');
+        }
+
         $srcY = $row[Data_UniversalTableL1_Constants::COL_LONG_STRING_2] ?? null;
         if (!is_string($srcY)) {
             return null;
@@ -2410,6 +2750,11 @@ final class Data_SchemeV1 implements Data_SchemeInterface
     }
 
                                   
+
+    private static function identityHash(string $scheme, string $src, string $tgt, ?string $hx, string $hy, ?string $hz): string
+    {
+        return self::hashStr($scheme . '|' . $src . '|' . $tgt . '|' . ($hx ?? '') . '|' . $hy . '|' . ($hz ?? ''));
+    }
 
     private static function canonForHash(string $s): string
     {
@@ -2585,14 +2930,28 @@ final class Data_TranslationMemoryDbRepository implements Data_TranslationMemory
 {
     private Data_L2ContextWindowStoreInterface $store;
 
-    public function __construct(?Data_L2ContextWindowStoreInterface $store = null)
-    {
-        $this->store = $store ?? new Data_L2TriadV1Store();
+    public function __construct(
+        ?Data_L2ContextWindowStoreInterface $store = null,
+        ?Diagnostics_StoreInterface $identityDiagnostics = null
+    ) {
+        $this->store = $store ?? new Data_L2TriadV1Store(null, null, $identityDiagnostics);
     }
 
     public function ensureReady(): void
     {
         $this->store->ensureSchema();
+    }
+
+    public function isReady(): bool
+    {
+        global $wpdb;
+        if (!($wpdb instanceof \wpdb)) {
+            return false;
+        }
+
+        $table = $wpdb->prefix . Data_UniversalTableL1_Constants::TABLE_SLUG;
+        $like = strtr($table, ['\\' => '\\\\', '_' => '\\_', '%' => '\\%']);
+        return $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $like)) === $table;
     }
 
     public function findById(int $id): ?Data_TmRowInterface
@@ -2683,6 +3042,16 @@ final class Data_TranslationMemoryDbRepository implements Data_TranslationMemory
         $this->store->updateTranslationById($id, $translatedText, $humanTouched, $metaJsonOrNull, \time());
     }
 
+    public function recordRetryFailure(int $id, string $error): int
+    {
+        return $this->store->recordRetryFailureById($id, $error, \time());
+    }
+
+    public function clearRetryState(int $id): void
+    {
+        $this->store->clearRetryStateById($id);
+    }
+
     public function markHumanTouched(int $id, bool $value): void
     {
         $this->store->setHumanLockedById($id, $value, \time());
@@ -2759,6 +3128,9 @@ final class Data_TranslationMemoryDbRepository implements Data_TranslationMemory
             ORDER BY short_string_1, short_string_2
         ", ARRAY_A);
 
+        if ($wpdb->last_error !== '') {
+            throw new Data_DbException('getStatsByPair failed: ' . (string) $wpdb->last_error);
+        }
         if (!is_array($rows)) {
             return [];
         }
@@ -2821,484 +3193,6 @@ final class Data_TranslationMemoryDbRepository implements Data_TranslationMemory
 }
 
 
-   
-                                                
-  
-                                          
-   
-class Data_TranslationMemoryInMemoryRepository implements Data_TranslationMemoryRepositoryInterface
-{
-    private Data_SchemeInterface $scheme;
-
-                                                  
-    protected static array $byId = [];
-
-                                                      
-    protected static array $byTriad = [];
-
-    protected static int $nextId = 1;
-
-    public function __construct(?Data_SchemeInterface $scheme = null)
-    {
-        $this->scheme = $scheme ?? new Data_SchemeV1();
-    }
-
-    public function ensureReady(): void
-    {
-                               
-    }
-
-    public function findById(int $id): ?Data_TmRowInterface
-    {
-        if ($id <= 0) {
-            throw new Data_InvalidArgumentException('Invalid id.');
-        }
-
-        $r = self::$byId[$id] ?? null;
-        if (!$r instanceof Data_RowRecordInterface) {
-            return null;
-        }
-
-        return self::recordToRow($r);
-    }
-
-    public function findExactRecord(
-        Language_PairInterface $pair,
-        string $prev,
-        string $core,
-        string $next
-    ): ?Data_TmRowInterface {
-        $w   = $this->scheme->makeWindow($prev, $core, $next, $pair);
-        $key = $this->scheme->buildRowKey($w, $pair);
-
-        $id = self::$byTriad[\bin2hex($key->triadHash())] ?? 0;
-        if ($id <= 0) {
-            return null;
-        }
-
-        $r = self::$byId[$id] ?? null;
-        if (!$r instanceof Data_RowRecordInterface) {
-            return null;
-        }
-
-        return self::recordToRow($r);
-    }
-
-    public function findNeighborCandidates(
-        Language_PairInterface $pair,
-        string $prev,
-        string $core,
-        string $next,
-        int $limit = 0,
-        bool $allowHygiene = true
-    ): array {
-                                                                                                                                       
-        $w = $this->scheme->makeWindow($prev, $core, $next, $pair);
-
-        $out = [];
-        foreach (self::$byId as $r) {
-            if ($r->key()->srcLang() !== $pair->getSourceLanguage()->getCode()) {
-                continue;
-            }
-            if ($r->key()->tgtLang() !== $pair->getTargetLanguage()->getCode()) {
-                continue;
-            }
-            if ($r->key()->schemeId() !== $this->scheme->schemeId()) {
-                continue;
-            }
-
-            if (!$this->scheme->isAcceptableNeighborMatch($r, $w)) {
-                continue;
-            }
-
-            $out[] = self::recordToRow($r);
-
-            if ($limit > 0 && \count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
-    }
-
-    public function touchUsageIfNeeded(int $id): bool
-    {
-        if ($id <= 0) {
-            throw new Data_InvalidArgumentException('Invalid id.');
-        }
-
-        $r = self::$byId[$id] ?? null;
-        if (!$r instanceof Data_RowRecordInterface) {
-            return false;
-        }
-
-        $now = \time();
-
-        if (!$this->scheme->shouldUpdateLastUsage($r->lastUsageEpochOrNull(), $now)) {
-            return false;
-        }
-
-        $expiration = $this->scheme->computeExpirationEpoch($now);
-
-        $updated = new Data_RowRecord(
-            $r->id(),
-            $r->key(),
-            $r->srcXOrNull(),
-            $r->srcY(),
-            $r->srcZOrNull(),
-            $r->isTranslated(),
-            $r->isHumanLocked(),
-            $r->targetTextOrNull(),
-            ($r->payloadJson() === '') ? null : $r->payloadJson(),
-            $now,
-            $expiration
-        );
-
-        self::$byId[$id] = $updated;
-        return true;
-    }
-
-    public function ensurePending(
-        Language_PairInterface $pair,
-        string $prev,
-        string $core,
-        string $next
-    ): int {
-        $now = \time();
-        $w   = $this->scheme->makeWindow($prev, $core, $next, $pair);
-
-        if ($w->isEmptyCore()) {
-            throw new Data_InvalidArgumentException('ensurePending() called for ineligible core.');
-        }
-
-
-        $keyHex = \bin2hex($this->scheme->buildRowKey($w, $pair)->triadHash());
-        $id     = self::$byTriad[$keyHex] ?? 0;
-
-        if ($id > 0) {
-            return $id;
-        }
-
-        $draft = $this->scheme->makeRowDraft($w, $pair);
-
-        $id = self::$nextId++;
-        $expiration = $this->scheme->computeExpirationEpoch($now);
-
-        $key = $draft->key();
-
-        $record = new Data_RowRecord(
-            $id,
-            $key,
-            $draft->srcXOrNull(),
-            $draft->srcY(),
-            $draft->srcZOrNull(),
-            false,
-            false,
-            null,
-            ($draft->payloadJson() === '') ? null : $draft->payloadJson(),
-            $now,
-            $expiration
-        );
-
-        self::$byId[$id] = $record;
-        self::$byTriad[$keyHex] = $id;
-
-        return $id;
-    }
-
-    public function updateTranslation(
-        int $id,
-        string $translatedText,
-        bool $humanTouched,
-        ?array $extraMeta
-    ): void {
-        $r = self::$byId[$id] ?? null;
-        if (!$r instanceof Data_RowRecordInterface) {
-
-            throw new Data_InvalidArgumentException('Row not found id=' . $id);
-        }
-
-        if ($r->isHumanLocked() && !$humanTouched) {
-            throw new Data_HumanLockedException('Row is human-locked; refusing auto overwrite.');
-        }
-
-        $now = \time();
-        $expiration = $this->scheme->computeExpirationEpoch($now);
-
-        $metaJson = null;
-        if ($extraMeta !== null) {
-            $json = \json_encode($extraMeta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            if (!is_string($json)) {
-                throw new Data_InvalidArgumentException('extraMeta could not be JSON-encoded.');
-            }
-            $metaJson = $json;
-        } else {
-            $metaJson = ($r->payloadJson() === '') ? null : $r->payloadJson();
-        }
-
-        $updated = new Data_RowRecord(
-            $r->id(),
-            $r->key(),
-            $r->srcXOrNull(),
-            $r->srcY(),
-            $r->srcZOrNull(),
-            true,
-            $r->isHumanLocked() || $humanTouched,
-            $translatedText,
-            $metaJson,
-            $now,
-            $expiration
-        );
-
-        self::$byId[$id] = $updated;
-    }
-
-    public function markHumanTouched(int $id, bool $value): void
-    {
-        $r = self::$byId[$id] ?? null;
-        if (!$r instanceof Data_RowRecordInterface) {
-
-            throw new Data_InvalidArgumentException('Row not found id=' . $id);
-        }
-
-        $now = \time();
-        $expiration = $this->scheme->computeExpirationEpoch($now);
-
-        $updated = new Data_RowRecord(
-            $r->id(),
-            $r->key(),
-            $r->srcXOrNull(),
-            $r->srcY(),
-            $r->srcZOrNull(),
-            $r->isTranslated(),
-            $value,
-            $r->targetTextOrNull(),
-            ($r->payloadJson() === '') ? null : $r->payloadJson(),
-            $r->lastUsageEpochOrNull() ?? $now,
-            $expiration
-        );
-
-        self::$byId[$id] = $updated;
-    }
-
-    public function deleteById(int $id): void
-    {
-        $r = self::$byId[$id] ?? null;
-        if (!$r instanceof Data_RowRecordInterface) {
-            return;
-        }
-
-        unset(self::$byId[$id]);
-
-        $triadHex = \bin2hex($r->key()->triadHash());
-        unset(self::$byTriad[$triadHex]);
-    }
-
-    public function deleteByWindow(
-        Language_PairInterface $pair,
-        string $prev,
-        string $core,
-        string $next
-    ): void {
-        $w   = $this->scheme->makeWindow($prev, $core, $next, $pair);
-        $key = $this->scheme->buildRowKey($w, $pair);
-
-        $id = self::$byTriad[\bin2hex($key->triadHash())] ?? 0;
-        if ($id > 0) {
-            $this->deleteById($id);
-        }
-    }
-
-    public function fetchPending(
-        Language_PairInterface $pair,
-        int $limit,
-        bool $allowHygiene = true
-    ): array
-    {
-        $out = [];
-
-        foreach (self::$byId as $r) {
-            if ($r->key()->schemeId() !== $this->scheme->schemeId()) {
-                continue;
-            }
-            if ($r->key()->srcLang() !== $pair->getSourceLanguage()->getCode()) {
-                continue;
-            }
-            if ($r->key()->tgtLang() !== $pair->getTargetLanguage()->getCode()) {
-                continue;
-            }
-            if ($r->isTranslated()) {
-                continue;
-            }
-
-            $out[] = self::recordToRow($r);
-
-            if (\count($out) >= $limit) {
-                break;
-            }
-        }
-
-        return $out;
-    }
-
-    public function runHygiene(
-        int $nowEpoch,
-        int $maxLifetimeSeconds,
-        int $pendingMaxAgeSeconds = 0,
-        int $corruptedScanLimit = 500
-    ): array {
-        $deletedGeneric   = 0;
-        $deletedPending   = 0;
-        $deletedCorrupted = 0;
-        $reregistered     = 0;
-
-        $horizonFuture = $nowEpoch + $maxLifetimeSeconds;
-        $horizonPast   = $nowEpoch - $maxLifetimeSeconds;
-
-        foreach (array_keys(self::$byId) as $id) {
-            $r = self::$byId[$id];
-
-            $exp = $r->expirationEpochOrNull();
-            $lastUsage = $r->lastUsageEpochOrNull();
-
-                              
-            if ($exp !== null && $exp < $nowEpoch) {
-                $this->deleteById((int) $id);
-                $deletedGeneric++;
-                continue;
-            }
-
-                                        
-            if ($exp !== null && $exp > $horizonFuture) {
-                $updated = new Data_RowRecord(
-                    $r->id(),
-                    $r->key(),
-                    $r->srcXOrNull(),
-                    $r->srcY(),
-                    $r->srcZOrNull(),
-                    $r->isTranslated(),
-                    $r->isHumanLocked(),
-                    $r->targetTextOrNull(),
-                    ($r->payloadJson() === '') ? null : $r->payloadJson(),
-                    $lastUsage,
-                    $horizonFuture
-                );
-                self::$byId[$id] = $updated;
-            }
-
-                                                                               
-            if ($exp === null && $lastUsage !== null && $lastUsage < $horizonPast) {
-                $this->deleteById((int) $id);
-                $deletedGeneric++;
-                continue;
-            }
-        }
-
-        if ($pendingMaxAgeSeconds > 0) {
-            $cutoff = $nowEpoch - $pendingMaxAgeSeconds;
-
-            foreach (array_keys(self::$byId) as $id) {
-                $r = self::$byId[$id];
-                if ($r->isTranslated()) {
-                    continue;
-                }
-                $lu = $r->lastUsageEpochOrNull() ?? 0;
-                if ($lu > 0 && $lu < $cutoff) {
-                    $this->deleteById((int) $id);
-                    $deletedPending++;
-                }
-            }
-        }
-
-        return [
-            'deleted_generic'    => (int) $deletedGeneric,
-            'deleted_pending'    => (int) $deletedPending,
-            'deleted_corrupted'  => (int) $deletedCorrupted,
-            'reregistered'       => (int) $reregistered,
-            'total_deleted'      => (int) ($deletedGeneric + $deletedPending + $deletedCorrupted),
-        ];
-    }
-
-    public function getStatsByPair(): array
-    {
-                                                  
-        $stats = [];
-        foreach (self::$byId as $r) {
-            $key = $r->key();
-            $src = $key->srcLang();
-            $tgt = $key->tgtLang();
-            $k   = $src . '→' . $tgt;
-
-            if (!isset($stats[$k])) {
-                $stats[$k] = ['src' => $src, 'tgt' => $tgt, 'total' => 0, 'translated' => 0, 'pending' => 0, 'human_locked' => 0, 'word_count' => 0];
-            }
-
-            $stats[$k]['total']++;
-            if ($r->isTranslated()) {
-                $stats[$k]['translated']++;
-            } else {
-                $stats[$k]['pending']++;
-            }
-            if ($r->isHumanLocked()) {
-                $stats[$k]['human_locked']++;
-            }
-            $src_text = $r->srcY();
-            if ($src_text !== '') {
-                $stats[$k]['word_count'] += \str_word_count($src_text);
-            }
-        }
-
-        return \array_values($stats);
-    }
-
-    public function findOrRegisterPending(
-        Language_PairInterface $pair,
-        string $prev,
-        string $core,
-        string $next
-    ): ?string {
-        $w = $this->scheme->makeWindow($prev, $core, $next, $pair);
-
-        if ($w->isEmptyCore()) {
-            return null;
-        }
-
-
-        $exact = $this->findExactRecord($pair, $prev, $core, $next);
-        if ($exact instanceof Data_TmRowInterface && $exact->isTranslated()) {
-            $id = $exact->getId();
-            if ($id > 0) {
-                $this->touchUsageIfNeeded($id);
-            }
-
-            $t = $exact->getTargetCoreOrNull();
-            if (is_string($t)) {
-                return $t;
-            }
-        }
-
-                                 
-        $this->ensurePending($pair, $prev, $core, $next);
-        return null;
-    }
-
-    protected static function recordToRow(Data_RowRecordInterface $r): Data_TmRowInterface
-    {
-        return new Data_TmRow($r);
-    }
-}
-
-   
-                                           
-  
-                                                              
-                                                                        
-                                          
-   
-final class Data_TranslationMemoryMock extends Data_TranslationMemoryInMemoryRepository
-{
-}
-
 
    
                                               
@@ -3309,28 +3203,30 @@ final class Data_TranslationMemoryRepository implements Data_TranslationMemoryRe
 {
     private Data_TranslationMemoryRepositoryInterface $impl;
 
+                                                                                                         
     public function __construct(
-        ?Data_TranslationMemoryRepositoryInterface $impl = null
+        ?Data_TranslationMemoryRepositoryInterface $impl = null,
+        ?Diagnostics_StoreInterface $identityDiagnostics = null
     ) {
         if ($impl !== null) {
             $this->impl = $impl;
             return;
         }
 
-                                                                         
-        $wpdbObj = null;
-        if (isset($GLOBALS['wpdb']) && $GLOBALS['wpdb'] instanceof \wpdb) {
-            $wpdbObj = $GLOBALS['wpdb'];
+        if (!isset($GLOBALS['wpdb']) || !($GLOBALS['wpdb'] instanceof \wpdb)) {
+            throw new Data_DbException('wpdb is not available.');
         }
-
-        $this->impl = ($wpdbObj instanceof \wpdb)
-            ? new Data_TranslationMemoryDbRepository()
-            : new Data_TranslationMemoryMock();
+        $this->impl = new Data_TranslationMemoryDbRepository(null, $identityDiagnostics);
     }
 
     public function ensureReady(): void
     {
         $this->impl->ensureReady();
+    }
+
+    public function isReady(): bool
+    {
+        return $this->impl->isReady();
     }
 
     public function findById(int $id): ?Data_TmRowInterface
@@ -3379,6 +3275,16 @@ final class Data_TranslationMemoryRepository implements Data_TranslationMemoryRe
         ?array $extraMeta
     ): void {
         $this->impl->updateTranslation($id, $translatedText, $humanTouched, $extraMeta);
+    }
+
+    public function recordRetryFailure(int $id, string $error): int
+    {
+        return $this->impl->recordRetryFailure($id, $error);
+    }
+
+    public function clearRetryState(int $id): void
+    {
+        $this->impl->clearRetryState($id);
     }
 
     public function markHumanTouched(int $id, bool $value): void

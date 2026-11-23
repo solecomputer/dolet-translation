@@ -1,0 +1,132 @@
+.dolet-settings-toggle {
+  margin-block-start: 1.25rem;
+  padding-block-start: .75rem;
+  border-block-start: 1px solid #eee;
+}
+
+.dolet-settings-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.dolet-settings-hint,
+#dolet-builder-root .dolet-builder-muted {
+  opacity: .7;
+}
+
+#dolet-builder-root .dolet-builder-card {
+  margin: 1rem 0;
+  padding: 1rem;
+}
+
+#dolet-builder-root .dolet-builder-heading {
+  margin: .2rem 0 1rem;
+}
+
+#dolet-builder-root .dolet-builder-heading-compact {
+  margin-block-end: .75rem;
+}
+
+#dolet-builder-root .dolet-builder-hint {
+  margin: .25rem 0 1rem;
+  opacity: .8;
+}
+
+#dolet-builder-root .dolet-source-options {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+
+#dolet-builder-root .dolet-source-choice,
+#dolet-builder-root .dolet-source-specific {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+#dolet-builder-root .dolet-source-choice-specific {
+  margin: 0;
+}
+
+#dolet-builder-root .dolet-source-select {
+  min-inline-size: 260px;
+  max-inline-size: 100%;
+}
+
+#dolet-builder-root .dolet-source-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: .75rem;
+  max-inline-size: 880px;
+  margin-block-start: .75rem;
+}
+
+#dolet-builder-root .dolet-field-label {
+  display: block;
+  margin-block-end: .25rem;
+}
+
+#dolet-builder-root .dolet-field-input {
+  inline-size: 100%;
+}
+
+#dolet-builder-root .dolet-code-input {
+  inline-size: 120px;
+}
+
+#dolet-builder-root .dolet-remove-column {
+  inline-size: 80px;
+}
+
+#dolet-builder-root .dolet-builder-actions {
+  margin: .5rem 0 1rem;
+}
+
+#dolet-builder-root .dolet-language-chooser summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-block-end: .75rem;
+}
+
+#dolet-builder-root .dolet-language-chooser[open] summary {
+  margin-block-end: 1rem;
+}
+
+#dolet-builder-root #dolet-active-table.is-empty thead {
+  display: none;
+}
+
+#dolet-builder-root .dolet-empty-targets {
+  padding: 1rem;
+  text-align: center;
+}
+
+#dolet-builder-root .dolet-palette-filter {
+  inline-size: 100%;
+  max-inline-size: 420px;
+  margin: 0 0 .75rem;
+}
+
+#dolet-builder-root .dolet-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+
+@media (max-width: 782px) {
+  #dolet-builder-root .dolet-source-specific {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  #dolet-builder-root .dolet-source-select {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+
+  #dolet-builder-root .dolet-source-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

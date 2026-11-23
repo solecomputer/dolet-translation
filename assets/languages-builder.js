@@ -7,7 +7,8 @@
         customList:     root.dataset.customListOption || '',
         holderId:       root.dataset.targetsHolderId || 'dolet_targets_holder',
         targetsField:   root.dataset.targetsField || '',
-        strNotePlaceholder: root.dataset.strNotePlaceholder || ''
+        strNotePlaceholder: root.dataset.strNotePlaceholder || '',
+        strNoTargets: root.dataset.strNoTargets || ''
       };
               
       this.$ = (q,ctx=document)=>ctx.querySelector(q);
@@ -17,12 +18,12 @@
       this.sourceSelect    = this.$('#dolet-source-select');
       this.siteRadio       = this.sourceModes.find(r=>r.value==='site');
       this.activeBody      = this.$('#dolet-active-table tbody');
+      this.activeTable     = this.$('#dolet-active-table');
       this.holder          = document.getElementById(this.cfg.holderId);
       this.palette         = this.$('#dolet-palette');
       this.filter          = this.$('#dolet-filter');
       this.addCustomBtn    = this.$('#dolet-add-custom');
       this.sourceNameInp   = this.$('#dolet-source-name');
-      this.sourceNoteInp   = this.$('#dolet-source-note');
     }
     init() {
                   
@@ -34,6 +35,7 @@
       this.addCustomBtn.addEventListener('click', ()=>this.addTargetRow('', '', '', true));
       document.addEventListener('submit', (e)=>this.handleSubmit(e));
                      
+      this.syncEmptyState();
       this.updateSourceHidden();
     }
 
@@ -93,11 +95,10 @@
       this.refreshPaletteDisabled();
     }
     updateSourceCustomizationBindings() {
-      if (!this.sourceNameInp || !this.sourceNoteInp) return;
+      if (!this.sourceNameInp) return;
       const code = this.sourceHidden && this.sourceHidden.value ? this.sourceHidden.value : 'original';
       const base = this.sourceNameInp.getAttribute('data-field-base') || '';
       this.sourceNameInp.name = `${base}[${this.escapeAttr(code)}][name]`;
-      this.sourceNoteInp.name = `${base}[${this.escapeAttr(code)}][note]`;
     }
     refreshPaletteDisabled() {
       const src = this.sourceHidden && this.sourceHidden.value ? this.sourceHidden.value : 'original';
@@ -118,6 +119,12 @@
       const tr = btn.closest('tr');
       const code = tr.getAttribute('data-code');
       tr.remove();
+      this.syncEmptyState();
+      const form = this.root.closest('form') || document.forms[0];
+      if (form && code) {
+        const hidden = form.querySelector(`input.dolet-custom-code[value="${CSS.escape(code)}"]`);
+        if (hidden) hidden.remove();
+      }
       const chip = this.palette.querySelector(`.dolet-chip[data-code="${CSS.escape(code)}"]`);
       if (chip) { chip.disabled = false; chip.classList.remove('disabled'); chip.title = chip.getAttribute('data-title-add'); }
     }
@@ -136,20 +143,23 @@
       });
     }
     addTargetRow(code, name, note, isCustom=false) {
+      const emptyRow = this.$('[data-dolet-empty-targets]', this.activeBody);
+      if (emptyRow) emptyRow.remove();
       const tr = document.createElement('tr');
       tr.setAttribute('data-code', code || '');
       const tdCode = document.createElement('td');
       tdCode.innerHTML = code ? `<code>${this.escapeHtml(code)}</code>`
-                              : '<input type="text" class="dolet-code-input" placeholder="code" style="width:120px;">';
+                              : '<input type="text" class="dolet-code-input" placeholder="code">';
       const tdName = document.createElement('td');
-      tdName.innerHTML = `<input type="text" style="width:100%" name="${this.cfg.customizations}[${this.escapeAttr(code)}][name]" value="${this.escapeAttr(name)}" placeholder="">`;
+      tdName.innerHTML = `<input type="text" class="dolet-field-input" name="${this.cfg.customizations}[${this.escapeAttr(code)}][name]" value="${this.escapeAttr(name)}" placeholder="">`;
       const tdNote = document.createElement('td');
-      tdNote.innerHTML = `<input type="text" style="width:100%" name="${this.cfg.customizations}[${this.escapeAttr(code)}][note]" value="${this.escapeAttr(note)}" placeholder="${this.escapeAttr(this.cfg.strNotePlaceholder)}">`;
+      tdNote.innerHTML = `<input type="text" class="dolet-field-input" name="${this.cfg.customizations}[${this.escapeAttr(code)}][note]" value="${this.escapeAttr(note)}" placeholder="${this.escapeAttr(this.cfg.strNotePlaceholder)}">`;
       const tdRemove = document.createElement('td');
-      tdRemove.style.width = '80px';
+      tdRemove.className = 'dolet-remove-column';
       tdRemove.innerHTML = '<button type="button" class="button link-delete dolet-remove-row">×</button>';
       tr.appendChild(tdCode); tr.appendChild(tdName); tr.appendChild(tdNote); tr.appendChild(tdRemove);
       this.activeBody.appendChild(tr);
+      this.syncEmptyState();
       if (isCustom) {
         const codeInput = tr.querySelector('.dolet-code-input');
                                                                          
@@ -183,6 +193,25 @@
         });
       }
       this.refreshPaletteDisabled();
+    }
+    syncEmptyState() {
+      const rows = this.$$('tr[data-code]', this.activeBody);
+      const emptyRow = this.$('[data-dolet-empty-targets]', this.activeBody);
+      if (rows.length > 0) {
+        if (emptyRow) emptyRow.remove();
+        this.activeTable && this.activeTable.classList.remove('is-empty');
+        return;
+      }
+      this.activeTable && this.activeTable.classList.add('is-empty');
+      if (emptyRow) return;
+      const row = document.createElement('tr');
+      row.setAttribute('data-dolet-empty-targets', '');
+      const cell = document.createElement('td');
+      cell.colSpan = 4;
+      cell.className = 'dolet-empty-targets';
+      cell.textContent = this.cfg.strNoTargets;
+      row.appendChild(cell);
+      this.activeBody.appendChild(row);
     }
     handleSubmit(e) {
       const form = e.target.closest && e.target.closest('form');

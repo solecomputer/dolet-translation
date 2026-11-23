@@ -135,8 +135,14 @@
 .dolet-floating-choice.is-active {
   background: #1e1e1e;
   color: #fff;
-  background: SelectedItem;
-  color: SelectedItemText;
+}
+
+@media (forced-colors: active) {
+  .dolet-floating-choice:hover,
+  .dolet-floating-choice.is-active {
+    background: Highlight;
+    color: HighlightText;
+  }
 }
 
 @media (max-width: 480px) {

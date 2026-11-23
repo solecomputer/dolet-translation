@@ -281,9 +281,13 @@ final class Language_Settings implements Language_SettingsInterface
         $rawParam = isset($_GET[Dom_Constants::LANGUAGE_URL_PARAMETER_NAME])
             ? wp_unslash($_GET[Dom_Constants::LANGUAGE_URL_PARAMETER_NAME])
             : null;
-        $param = is_string($rawParam)
-            ? sanitize_text_field($rawParam)
-            : null;
+        $param = \is_string($rawParam) ? $rawParam : null;
+                                                                              
+                                                                           
+        if ($param !== null && (\preg_match('//u', $param) !== 1
+            || \preg_match('/[\x00-\x1F\x7F]/', $param) === 1)) {
+            $param = \sanitize_text_field($param);
+        }
 
         if ($param === null || trim($param) === '') {
             return new Language_Option(

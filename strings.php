@@ -2,25 +2,31 @@
 
 return [
                                                  
-    'block_title'                   => 'Dolet: Language Menu',
-    'block_description'             => 'Display the Dolet language switcher menu.',
+    'block_title'                   => 'Sole Translation: Language Menu',
+    'block_description'             => 'Display the Sole Translation language switcher menu.',
 
                     
-    'page_title'                    => 'Dolet AI Translation',
-    'save_button'                   => 'Save Languages',
+    'page_title'                    => 'Sole Translation',
+    'save_button'                   => 'Save language and translation settings',
     'section_title'                 => 'Languages',
-    'section_description'           => 'Pick one <strong>Source</strong> (including <em>Original</em>) and any number of <strong>Targets</strong>.',
+    'section_description'           => 'First enable translation, then pick one <strong>Source</strong> (including <em>Original</em>) and one or more <strong>Targets</strong>. Save these settings, visit public pages while logged out to register their text, and let the scheduled worker process the queue.',
     'processing_heading'            => 'Translation processing',
-    'processing_note'               => 'Translating your website may take a few hours, depending on its size and visitor activity. Processing happens as people use your site.',
+    'processing_note'               => 'Translation is gradual. Anonymous public visits register up to 100 new text segments per request and 1,000 per UTC day; scheduled background processing then handles pending text. Large sites can take multiple days.',
     'processing_pending'            => 'Pending text segments',
+    'processing_unavailable'        => 'Unavailable',
     'processing_last_success'       => 'Last successful translation update',
     'processing_next_scheduled'     => 'Next automatic processing time',
     'processing_never'              => 'None yet',
     'processing_not_scheduled'      => 'Not scheduled',
+    'processing_disabled'           => 'Enable translation and save the settings before processing pending text.',
+    'processing_busy'               => 'Translation processing is already running. Try again after the current run finishes.',
+    'processing_failed'             => 'Processing stopped after an internal error. Review Diagnostics, then try again.',
+    'processing_summary'            => 'Checked {checked} earlier requests; saved {saved} translations; sent {sent} language groups; {busy} languages are already processing.',
+    'save_scope'                    => 'The save button stores every setting on this page, including whether Sole Translation data is deleted when the plugin is removed.',
 
                                 
     'enable_translation_label'      => 'Enable translation',
-    'enable_translation_hint'       => 'activate the background translation worker',
+    'enable_translation_hint'       => 'when enabled, serve translated pages and language menus, publish translation metadata, register text, and run automatic Engine translation; disabling returns visitors to original content',
 
                                     
     'translate_pre_textarea_label'  => 'Translate pre/textarea',
@@ -28,7 +34,7 @@ return [
 
                    
     'debug_label'                   => 'Debug mode',
-    'debug_hint'                    => 'for diagnostics only; shows ✓ (translated) and ✗ (pending) markers around text segments and adds a colored footer badge. The translation worker runs asynchronously via WP-Cron &mdash; text is not translated instantly on first visit.',
+    'debug_hint'                    => 'for diagnostics only; logged-in administrators see ✓ (translated) and ✗ (pending) markers around text segments and a colored footer badge. Public visitors never see debug decoration. The translation worker runs asynchronously via WP-Cron &mdash; text is not translated instantly on first visit.',
 
                     
     'sole_engine_missing'           => 'The SOLE Engine plugin is not active. New translations will not be generated until it is installed and activated.',
@@ -36,16 +42,20 @@ return [
     'sole_engine_credential_unverified' => 'Translation is enabled, but the saved SOLE Engine credential has not been verified. Open SOLE Engine Diagnostics and refresh Account Status.',
     'sole_engine_credential_invalid' => 'Translation is enabled, but SOLE Engine rejected the saved credential. Replace the saved user key from your SOLE account, then verify Account Status.',
     'sole_engine_readiness_unavailable' => 'Translation is enabled, but SOLE Engine credential readiness is unavailable. Update or activate SOLE Engine, then review its Diagnostics.',
-    'debug_loaded'                  => 'Dolet WP loaded (debug on).',
-    'debug_footer'                  => 'Translated by Dolet AI (debug)',
+    'debug_loaded'                  => 'Sole Translation loaded (debug on).',
+    'debug_footer'                  => 'Translated by Sole Translation (debug)',
 
                                          
     'source_label'                  => 'Source language',
-    'source_hint'                   => 'Pick how the source language is determined. "Original" lets the system autodetect the content\'s original language. You can override the display label and note for the chosen source.',
+    'source_hint'                   => 'Pick how the source language is determined. "Original" lets the system autodetect the content\'s original language. You can override the display label for the chosen source.',
     'targets_label'                 => 'Target languages',
-    'targets_hint'                  => 'Add languages visitors can read the site in. You can rename labels and add AI notes per language.',
+    'targets_hint'                  => 'Add languages visitors can read the site in. You can rename labels and add AI notes per language. For new custom codes, use letters and digits separated by hyphens or underscores. Existing saved codes are retained.',
+    'language_code_rejected'        => 'Some language entries were rejected. Check the saved source and target languages. New codes need letters or digits separated by hyphens.',
     'available_label'               => 'Available languages',
     'add_custom_button'             => 'Add custom language',
+    'choose_languages_summary'      => 'Choose target languages',
+    'no_targets_selected'           => 'No target languages selected. Search below to add one.',
+    'search_label'                  => 'Search available languages',
     'search_placeholder'            => 'Search by code or name',
 
                                                 
@@ -61,8 +71,6 @@ return [
 
                                              
     'source_display_name_label'     => 'Source display name (optional)',
-    'source_note_label'             => 'Source note (for AI, optional)',
-    'source_note_placeholder'       => 'e.g. International neutral Spanish',
 
                                              
     'select_default'                => '— Select —',
@@ -73,11 +81,10 @@ return [
     'note_placeholder'              => 'Optional note',
 
                            
-    'widget_title'                  => 'Dolet: Language Menu',
-    'widget_description'            => 'Display the Dolet language switcher menu.',
+    'widget_title'                  => 'Sole Translation: Language Menu',
+    'widget_description'            => 'Display the Sole Translation language switcher menu.',
     'widget_no_settings'            => 'No settings. Use the Languages page to configure sources/targets and labels.',
     'menu_show_codes'               => 'Show language codes',
-    'menu_show_interlingua'         => 'Show Interlingua names',
     'menu_wrapper_class'            => 'Wrapper CSS class',
 
                                            
@@ -85,6 +92,8 @@ return [
     'floating_selector_hint'        => 'show a language dropdown at the bottom of public pages',
     'floating_selector_summary'     => 'Language',
     'floating_selector_aria_label'  => 'Floating language selector',
+    'delete_on_uninstall_label'     => 'Delete Sole Translation data when the plugin is deleted',
+    'delete_on_uninstall_hint'      => 'removes the translation-memory table and saved settings; disabled by default',
 
                  
     'nav_aria_label'                => 'Languages',
@@ -112,6 +121,32 @@ return [
     'console_worker_trigger'        => 'Process now',
     'console_worker_running'        => 'Processing…',
     'console_worker_done'           => 'Processing request complete.',
+    'error_prefix'                  => 'Error:',
+    'error_forbidden'               => 'You are not allowed to perform this action.',
+    'error_unknown'                 => 'unknown',
+    'error_engine_unavailable'      => 'SOLE Engine is not available.',
+    'error_diagnostics_unavailable' => 'Diagnostics storage is not available.',
+    'console_required_fields'       => 'Target language and text are required.',
+    'console_invalid_utf8'          => 'Text must be valid UTF-8.',
+    'console_invalid_pair'          => 'Choose a configured source and target language.',
+    'console_encode_failed'         => 'Could not prepare the translation request.',
+    'console_invalid_job'           => 'Engine returned an invalid job ID.',
+    'console_unknown_job'           => 'The translation job is invalid, expired, or belongs to another administrator.',
+    'js_missing_ajax_url'           => 'Missing AJAX URL',
+    'js_invalid_json'               => 'Invalid JSON response',
+    'js_http_error'                 => 'HTTP error',
+    'js_job_submitted'              => 'Job submitted:',
+    'js_poll_pending'               => 'Pending…',
+    'js_poll_timeout'               => 'Timed out while waiting for the result.',
+    'js_result'                     => 'Result:',
+    'js_failed'                     => 'Failed:',
+    'js_ajax_error'                 => 'AJAX error',
+    'js_running'                    => 'Running…',
+    'js_pending'                    => 'pending',
+    'js_pass'                       => 'pass',
+    'js_fail'                       => 'fail',
+    'js_error'                      => 'error',
+    'js_not_available'              => '—',
 
                                      
     'console_test_heading'          => 'Single String Test',
@@ -136,13 +171,52 @@ return [
     'diag_engine_action_unverified' => 'Open SOLE Engine Diagnostics and refresh Account Status.',
     'diag_engine_action_invalid'    => 'Replace the saved user key from your SOLE account, then verify Account Status.',
     'diag_engine_action_verified'   => 'No credential action needed.',
+    'diag_engine_endpoint_withheld' => 'Engine endpoint is not shown until SOLE Engine offers a public helper.',
     'diag_cron_scheduled'           => 'Worker cron: scheduled',
     'diag_cron_not_scheduled'       => 'Worker cron: not scheduled',
+    'diag_cron_disabled'            => 'Worker cron: not scheduled (translation disabled)',
     'diag_table_exists'             => 'TM table: exists',
     'diag_table_missing'            => 'TM table: missing',
     'diag_translation_enabled'      => 'Translation: enabled',
     'diag_translation_disabled'     => 'Translation: disabled',
     'diag_languages_label'          => 'Configured languages',
+    'diag_languages_summary'        => 'Source: {source} | Targets: {targets}',
+    'diag_languages_none'           => '(none)',
+
+                                                                   
+    'diag_candidate_prefix' => 'Generated response',
+    'diag_rejection_attributes' => 'A tag exceeds the supported attribute limit.',
+    'diag_rejection_bytes' => 'The response exceeds the supported byte limit.',
+    'diag_rejection_content' => 'The generated response lost visible content.',
+    'diag_rejection_declaration' => 'The markup contains an unsupported declaration.',
+    'diag_rejection_depth' => 'The markup exceeds the supported nesting limit.',
+    'diag_rejection_document_prefix' => 'The page contains content before the document root.',
+    'diag_rejection_empty' => 'The generated response was empty.',
+    'diag_rejection_foreign_structure' => 'The markup crosses an unsupported foreign-content boundary.',
+    'diag_rejection_layout' => 'The document framing is unsupported.',
+    'diag_rejection_lexical' => 'The markup is incomplete or ambiguous.',
+    'diag_rejection_mapping' => 'An eligible source span could not be mapped safely.',
+    'diag_rejection_math_vocabulary' => 'The markup contains an unsupported MathML element.',
+    'diag_rejection_memory' => 'There is insufficient safe parsing memory.',
+    'diag_rejection_menu_bounds' => 'The language menu has no valid body range.',
+    'diag_rejection_menu_frame' => 'A language-menu frame is incomplete or ambiguous.',
+    'diag_rejection_menu_outcome' => 'A required language-menu outcome is unavailable.',
+    'diag_rejection_menu_placement' => 'A registered language menu is outside the body.',
+    'diag_rejection_plaintext' => 'The page uses unsupported PLAINTEXT parsing.',
+    'diag_rejection_preflight_direction' => 'Document-direction preparation failed.',
+    'diag_rejection_preflight_environment' => 'Cache-header preparation failed.',
+    'diag_rejection_preflight_menu' => 'Original language-menu preparation failed.',
+    'diag_rejection_preflight_request' => 'Request-address preparation failed.',
+    'diag_rejection_raw' => 'A protected text element is unfinished.',
+    'diag_rejection_render_language' => 'Document-language metadata preparation failed.',
+    'diag_rejection_render_menu' => 'Final language-menu preparation failed.',
+    'diag_rejection_render_metadata' => 'Translation metadata preparation failed.',
+    'diag_rejection_render_translation' => 'The translation operation failed.',
+    'diag_rejection_render_validation' => 'Response validation failed.',
+    'diag_rejection_shape' => 'The generated response changed document framing.',
+    'diag_rejection_svg_vocabulary' => 'The markup contains an unsupported SVG element.',
+    'diag_rejection_unfinished' => 'A template or foreign-content container is unfinished.',
+    'diag_rejection_units' => 'The markup exceeds the supported token-and-attribute budget.',
 
                                 
     'diag_error_log_heading'        => 'Error log',
@@ -157,6 +231,7 @@ return [
                                  
     'diag_tests_heading'            => 'Self-tests',
     'diag_test_run_all'             => 'Run all',
+    'diag_test_run'                 => 'Run',
     'diag_test_col_test'            => 'Test',
     'diag_test_col_description'     => 'Description',
     'diag_test_col_result'          => 'Result',
@@ -166,4 +241,21 @@ return [
     'diag_test_tm_table_ready'      => 'Translation memory table ready',
     'diag_test_codec_roundtrip'     => 'Codec encode/decode roundtrip',
     'diag_test_submit_poll_flow'    => 'Submit and poll translation flow',
+    'diag_no_targets'               => 'No target languages are configured.',
+    'diag_config_summary'           => 'Source: {source}; targets: {targets}; translation: {state}.',
+    'diag_state_enabled'            => 'enabled',
+    'diag_state_disabled'           => 'intentionally disabled',
+    'diag_table_ready'              => 'Table {table} exists and is ready.',
+    'diag_table_not_ready'          => 'Table {table} does not exist after the readiness check.',
+    'diag_codec_encode_failed'      => 'Encoding failed.',
+    'diag_codec_decode_failed'      => 'Decoding failed.',
+    'diag_codec_pass'               => 'Roundtrip succeeded for {count} keys.',
+    'diag_codec_mismatch'           => 'Roundtrip mismatch: {original} original keys and {decoded} decoded keys.',
+    'diag_submit_rejected'          => 'Submission was rejected: {error}.',
+    'diag_job_submitted'            => 'Submitted; the browser will poll for the result.',
+    'diag_job_unknown'              => 'Unknown or expired diagnostic job.',
+    'diag_job_pending'              => 'Still pending; the browser will poll again.',
+    'diag_job_complete'             => 'Completed. Reply: {reply}',
+    'diag_job_failed'               => 'Job failed: {error}.',
+    'diag_poll_timeout'             => 'Timed out after 30 browser polls.',
 ];

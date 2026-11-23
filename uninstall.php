@@ -11,7 +11,7 @@
                                                                               
                                         
                                                                          
-                                          
+                                                                              
   
                                                                         
                                                                              
@@ -33,4 +33,3 @@ require_once __DIR__ . '/core.php';
                                                                              
 \DoletWP\Data_UniversalTableL1_Tools::maybeDropOnUninstall();
 \DoletWP\Core_Strings::deleteOnUninstall();
-\DoletWP\Config_InstallationState::deleteOnUninstall();

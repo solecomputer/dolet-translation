@@ -163,10 +163,10 @@ interface Approach_PollResultInterface
     public function getErrorOrNull(): ?string;
 
        
-                                                           
+                                                    
                                                    
       
-                                   
+                                
        
     public function getTranslatedMap(): array;
 }
@@ -193,6 +193,14 @@ interface Config_DebugSettingsInterface
    
 interface Config_LanguageAdminInterface
 {
+                                                                                  
+    public function sanitizeCodeInput(mixed $value): ?string;
+       
+                                            
+                           
+       
+    public function sanitizeCodeInputs(array $values): array;
+
                                                               
     public function getSourceCode(): string;
     public function setSourceCode(string $code): void;
@@ -210,13 +218,13 @@ interface Config_LanguageAdminInterface
     public function setCustomCodes(array $codes): void;
 
                                                          
-                                                                 
+                                                                    
     public function getCustomizations(): array;
-                                                                     
+                                                                        
     public function setCustomizations(array $map): void;
 
                                                                                          
-                                       
+                                          
     public function getSelectableCatalog(): array;
 
                                                                                         
@@ -239,6 +247,21 @@ interface Config_ApproachSettingsInterface
 
                                                             
     public function getMaxBatchItems(): int;
+}
+
+                                                                                
+interface Config_OptionLeaseInterface
+{
+    public function acquire(): bool;
+    public function renew(): bool;
+    public function release(): void;
+}
+
+                                                                   
+interface Config_OptionValueInterface
+{
+                                                               
+    public static function boolean(mixed $value): bool;
 }
 
    
@@ -275,12 +298,6 @@ final class Config_TranslationOptionNames
     public const TRANSLATE_PRE_TEXTAREA = 'dolet_translate_pre_textarea';
 }
 
-                                                     
-final class Config_InstallationOptionNames
-{
-    public const ACTIVATED_AT = 'dolet_activated_at';
-}
-
    
                                                      
   
@@ -293,6 +310,28 @@ final class Config_DiagnosticsOptionNames
     public const LAST_ERROR    = 'dolet_last_error';
     public const LAST_ERROR_AT = 'dolet_last_error_at';
     public const LAST_SUCCESS  = 'dolet_last_success';
+    public const ROOT_INCIDENT = 'dolet_diagnostics_root_incident';
+    public const MUTATION_LEASE = 'dolet_diagnostics_mutation_lease';
+}
+
+                                                                     
+final class Config_PendingRegistrationOptionNames
+{
+    public const DAILY_BUDGET = 'dolet_pending_registration_daily_budget';
+}
+
+                                                                       
+final class Config_HygieneOptionNames
+{
+    public const LAST_RUN = 'dolet_hygiene_last_run';
+    public const LAST_COUNTS = 'dolet_hygiene_last_counts';
+}
+
+                                                                 
+final class Config_WorkerOptionNames
+{
+    public const LEASE = 'dolet_translation_worker_lease';
+    public const LEASE_SECONDS = 900;
 }
 
 
@@ -300,6 +339,78 @@ final class Config_DiagnosticsOptionNames
                                                                              
               
                                                                              
+
+                                                                                   
+interface Core_HtmlRejectionInterface
+{
+                                                                                  
+    public function code(bool $candidate = false): string;
+                                           
+    public function context(): string;
+                                                            
+    public function label(): string;
+}
+
+enum Core_HtmlRejection: string implements Core_HtmlRejectionInterface
+{
+    case Attributes = 'attributes';
+    case Bytes = 'bytes';
+    case Content = 'content';
+    case Declaration = 'declaration';
+    case Depth = 'depth';
+    case DocumentPrefix = 'document_prefix';
+    case Empty = 'empty';
+    case ForeignStructure = 'foreign_structure';
+    case Layout = 'layout';
+    case Lexical = 'lexical';
+    case Mapping = 'mapping';
+    case MathVocabulary = 'math_vocabulary';
+    case Memory = 'memory';
+    case MenuBounds = 'menu_bounds';
+    case MenuFrame = 'menu_frame';
+    case MenuOutcome = 'menu_outcome';
+    case MenuPlacement = 'menu_placement';
+    case Plaintext = 'plaintext';
+    case PreflightDirection = 'preflight_direction';
+    case PreflightEnvironment = 'preflight_environment';
+    case PreflightMenu = 'preflight_menu';
+    case PreflightRequest = 'preflight_request';
+    case Raw = 'raw';
+    case RenderLanguage = 'render_language';
+    case RenderMenu = 'render_menu';
+    case RenderMetadata = 'render_metadata';
+    case RenderTranslation = 'render_translation';
+    case RenderValidation = 'render_validation';
+    case Shape = 'shape';
+    case SvgVocabulary = 'svg_vocabulary';
+    case Unfinished = 'unfinished';
+    case Units = 'units';
+
+    public function code(bool $candidate = false): string
+    {
+        return 'final_html_rejected_' . ($candidate ? 'candidate_' : '') . $this->value;
+    }
+
+    public function context(): string
+    {
+        return $this->value;
+    }
+
+    public function label(): string
+    {
+        return Core_Strings::get('diag_rejection_' . $this->value);
+    }
+
+    public static function fromCode(?string $code): ?Core_HtmlRejectionInterface
+    {
+        foreach (self::cases() as $reason) {
+            if ($code === $reason->code() || $code === $reason->code(true)) {
+                return $reason;
+            }
+        }
+        return null;
+    }
+}
 
    
                                                         
@@ -314,6 +425,7 @@ final class Core_StringsOptionNames
     public const TRANSLATED = 'dolet_strings_translated';
                                                                              
     public const AUTOTRANSLATE_STATE = 'dolet_strings_translate';
+    public const AUTOTRANSLATE_LOCK = 'dolet_strings_translate_lock';
 }
 
 
@@ -355,9 +467,19 @@ interface Diagnostics_StoreInterface
             
                                                                             
                                          
-                                                                         
-                               
+                                                                                   
+                                                                
    
+
+                                                                            
+interface Data_PairRepresentationRejectedExceptionInterface extends \Throwable
+{
+}
+
+                                                                            
+interface Data_StoredIdentityMismatchExceptionInterface extends \Throwable
+{
+}
 
    
                                                    
@@ -392,6 +514,10 @@ interface Data_TmRowInterface
   
                                                                           
                                                                                
+                                                                                   
+                                                                                   
+                                                                                           
+                                                                          
    
 interface Data_TranslationMemoryRepositoryInterface
 {
@@ -418,6 +544,9 @@ interface Data_TranslationMemoryRepositoryInterface
 
                                                              
     public function ensureReady(): void;
+
+                                                                         
+    public function isReady(): bool;
 
        
                                  
@@ -474,6 +603,10 @@ interface Data_TranslationMemoryRepositoryInterface
         bool $humanTouched,
         ?array $extraMeta
     ): void;
+
+    public function recordRetryFailure(int $id, string $error): int;
+
+    public function clearRetryState(int $id): void;
 
     public function markHumanTouched(int $id, bool $value): void;
 
@@ -587,8 +720,26 @@ interface Dom_EngineInterface
                                                                                      
     public function setAnchorHref(mixed $nodeRef, string $href): void;
 
-                                                          
+                                                                   
     public function serializeFragment(): string;
+
+                                                                              
+    public function getSourceMutationFailure(): ?string;
+
+                                                                                        
+    public function getRejection(): ?Core_HtmlRejectionInterface;
+}
+
+   
+                                                                              
+   
+interface Dom_RawStructureGuardInterface
+{
+                                                                                     
+    public function findFirstLoss(string $sourceHtml, string $serializedHtml): ?string;
+
+                                                                                      
+    public function findFirstLossResult(string $sourceHtml, string $serializedHtml): string|Core_HtmlRejectionInterface|null;
 }
 
    
@@ -621,6 +772,18 @@ interface Dom_TranslatableInterface
 
                        
     public function getHtml(): string;
+
+                                                                           
+    public function findStructureLoss(string $serializedHtml): ?string;
+
+                                                                                       
+    public function findStructureLossResult(string $serializedHtml): string|Core_HtmlRejectionInterface|null;
+
+                                                                                              
+    public function getRejection(): ?Core_HtmlRejectionInterface;
+
+                                                                                              
+    public function getRejectedInlinePhraseHashes(): array;
 }
 
    
@@ -642,9 +805,16 @@ interface Dom_TranslatedStampInterface
    
 final class Dom_Constants
 {
+    public const TOKENIZER_REJECTION_DETAIL = 'The shared source tokenizer rejected incomplete or ambiguous markup.';
     public const LANGUAGE_URL_PARAMETER_NAME = 'l';
 
     public const PAGE_STAMP_PREFIX = 'DOLET_PAGE:';                                          
+}
+
+                                             
+final class Translation_RuntimeOptionNames
+{
+    public const INLINE_PHRASE_REJECTIONS = 'dolet_inline_phrase_rejections';
 }
 
 
@@ -777,6 +947,37 @@ final class Language_Constants
                  
                                                                              
 
+interface Routines_AdminConsoleInterface extends Routine_RoutineInterface
+{
+    public function renderPanel(): void;
+    public function renderProcessingOverview(): void;
+}
+
+interface Routines_AdminDiagnosticsInterface extends Routine_RoutineInterface
+{
+    public function setSelfTests(Routines_AdminSelfTestsInterface $selfTests): void;
+    public function renderPanel(): void;
+}
+
+interface Routines_AdminSelfTestsInterface extends Routine_RoutineInterface
+{
+    public function renderPanel(): void;
+}
+
+                                                                                                
+interface Routines_TemplateResponseInterface
+{
+    public function getSelectedTemplate(): string;
+    public function hasStartedTemplateResponse(): bool;
+    public function prepareTemplateResponse(): void;
+    public function startTemplateResponse(): void;
+    public function reportTemplateBufferFailure(): void;
+    public function finalizeResponse(): void;
+    public function clearTemplateResponse(): void;
+    public function ownsTemplateBuffer(): bool;
+    public static function identityBuffer(string $buffer): string;
+}
+
    
                                                             
   
@@ -848,9 +1049,6 @@ interface Structs_TrimmableStringsArrayInterface
    
 interface Translation_TranslatorInterface
 {
-                                                                                    
-    public function naiveTranslate(string $rawString): string;
-
                                                                                                                                                     
     public function translateContextual(
         Structs_FixedOrderedKeysArrayOfStringsInterface $arrayOfStrings
@@ -860,7 +1058,25 @@ interface Translation_TranslatorInterface
     public function translateHtml(string $html): string;
 
                                                                                                   
-    public function translateFinalHtml(string $html): string;
+    public function translateFinalHtml(string $html, bool $deferTypedRejection = false): string;
+
+                                                                                            
+    public function getRejectionLastPass(): ?Core_HtmlRejectionInterface;
+
+                                                                                 
+    public function didTranslateLastPass(): bool;
+
+                                                                                        
+    public function isCompleteLastPass(): bool;
+
+                                                                                    
+    public function didLoseStructureLastPass(): bool;
+}
+
+                                                                                   
+interface Translation_PendingRegistrationPolicyInterface
+{
+    public function claim(): bool;
 }
 
    
@@ -972,7 +1188,6 @@ interface UiVisitor_LanguageMenuViewInterface
 {
     public function setWrapperClass(string $class): void;
     public function setShowCodes(bool $showCodes): void;
-    public function setShowInterlingua(bool $showInterlingua): void;
 
     public function addItem(UiVisitor_LanguageMenuItemViewInterface $item): void;
 
@@ -1040,7 +1255,7 @@ interface UiWebmaster_LanguagesBuilderViewInterface
     public function setSiteCode(string $siteCode): void;
 
        
-                                                         
+                                                            
        
     public function setCatalogNoOriginal(array $catalog): void;
 
@@ -1049,7 +1264,6 @@ interface UiWebmaster_LanguagesBuilderViewInterface
     public function setSourceDisplayCode(string $code): void;
     public function setSourceDefaultName(string $name): void;
     public function setSourceCurrentName(string $name): void;
-    public function setSourceCurrentNote(string $note): void;
 
               
     public function setTargetsHolderDomId(string $domId): void;
@@ -1062,7 +1276,7 @@ interface UiWebmaster_LanguagesBuilderViewInterface
     public function setLanguageCustomizationsOptionName(string $optionName): void;
 
        
-                                           
+                                              
        
     public function setCatalogForDefaults(array $catalog): void;
 

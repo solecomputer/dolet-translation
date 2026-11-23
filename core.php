@@ -106,6 +106,30 @@ interface Core_PluginInterface
           
                                                                                
 
+                                                                                     
+final class Core_HtmlCandidateRejection implements Core_HtmlRejectionInterface
+{
+    public function __construct(private readonly Core_HtmlRejectionInterface $reason)
+    {
+    }
+
+                                                                        
+    public function code(bool $candidate = false): string
+    {
+        return $this->reason->code(true);
+    }
+
+    public function context(): string
+    {
+        return $this->reason->context();
+    }
+
+    public function label(): string
+    {
+        return $this->reason->label();
+    }
+}
+
    
                                                                               
   
@@ -132,9 +156,13 @@ final class Core_Strings
             $base = (array) include $source;
         }
 
+        $version = \md5(\serialize($base));
         $overlay = \get_option(Core_StringsOptionNames::TRANSLATED);
-        if (\is_array($overlay)) {
-            $base = \array_merge($base, $overlay);
+        if (\is_array($overlay)
+            && ($overlay['locale'] ?? null) === \get_locale()
+            && ($overlay['version'] ?? null) === $version
+            && \is_array($overlay['strings'] ?? null)) {
+            $base = \array_merge($base, $overlay['strings']);
         }
 
         self::$strings = $base;
@@ -152,9 +180,13 @@ final class Core_Strings
       
                                                
        
-    public static function storeOverlay(array $translated): void
+    public static function storeOverlay(array $translated, string $locale, string $version): void
     {
-        \update_option(Core_StringsOptionNames::TRANSLATED, $translated, 'yes');
+        \update_option(Core_StringsOptionNames::TRANSLATED, [
+            'locale' => $locale,
+            'version' => $version,
+            'strings' => $translated,
+        ], 'yes');
     }
 
        
@@ -166,6 +198,7 @@ final class Core_Strings
     {
         \delete_option(Core_StringsOptionNames::TRANSLATED);
         \delete_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE);
+        \delete_option(Core_StringsOptionNames::AUTOTRANSLATE_LOCK);
     }
 
                                       

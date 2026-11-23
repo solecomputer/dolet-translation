@@ -1,6 +1,7 @@
 (function () {
   var config = window.doletAdminSettings || {};
   var ajaxUrl = config.ajaxUrl || '';
+  var ui = config.ui || {};
 
   function encode(params) {
     var parts = [];
@@ -14,7 +15,7 @@
 
   function post(params, callback) {
     if (!ajaxUrl) {
-      callback({ success: false, data: { error: 'Missing AJAX URL' } });
+      callback({ success: false, data: { error: ui.missingAjaxUrl || '' } });
       return;
     }
     var xhr = new XMLHttpRequest();
@@ -24,11 +25,11 @@
       try {
         callback(JSON.parse(xhr.responseText));
       } catch (error) {
-        callback({ success: false, data: { error: 'Invalid JSON' } });
+        callback({ success: false, data: { error: ui.invalidJson || '' } });
       }
     };
     xhr.onerror = function () {
-      callback({ success: false, data: { error: 'HTTP ' + xhr.status } });
+      callback({ success: false, data: { error: (ui.httpError || '') + ' ' + xhr.status } });
     };
     xhr.send(encode(params));
   }
@@ -39,8 +40,14 @@
     post(data, callback);
   }
 
-  function postDiagnostics(action, callback) {
-    post({ action: action, _ajax_nonce: config.diagnosticsNonce || '' }, callback);
+  function postDiagnostics(action, data, callback) {
+    if (typeof data === 'function') {
+      callback = data;
+      data = {};
+    }
+    data.action = action;
+    data._ajax_nonce = config.diagnosticsNonce || '';
+    post(data, callback);
   }
 
   var tabLinks = document.querySelectorAll('#dolet_tabs .nav-tab');
@@ -79,6 +86,7 @@
   var statsNone = document.getElementById('dolet_stats_none');
   var statsButton = document.getElementById('dolet_stats_refresh');
   var processingPending = document.getElementById('dolet_processing_pending');
+  var statsEmptyText = statsNone ? statsNone.textContent : '';
   function refreshStats() {
     if (!statsButton) {
       return;
@@ -86,14 +94,27 @@
     statsButton.disabled = true;
     postConsole('dolet_console_stats', {}, function (response) {
       statsButton.disabled = false;
-      if (!response.success || !response.data || !response.data.length) {
+      if (!response.success) {
         if (statsTable) {
           statsTable.style.display = 'none';
         }
         if (statsNone) {
+          statsNone.textContent = response.data && response.data.error
+            ? String(response.data.error)
+            : (ui.notAvailable || ui.unknown || '');
           statsNone.style.display = '';
         }
-        if (processingPending && response.success) {
+        return;
+      }
+      if (!response.data || !response.data.length) {
+        if (statsTable) {
+          statsTable.style.display = 'none';
+        }
+        if (statsNone) {
+          statsNone.textContent = statsEmptyText;
+          statsNone.style.display = '';
+        }
+        if (processingPending) {
           processingPending.textContent = '0';
         }
         return;
@@ -102,6 +123,7 @@
         statsTable.style.display = '';
       }
       if (statsNone) {
+        statsNone.textContent = statsEmptyText;
         statsNone.style.display = 'none';
       }
       while (statsBody.firstChild) {
@@ -142,10 +164,12 @@
       postConsole('dolet_console_worker_trigger', {}, function (response) {
         workerButton.disabled = false;
         if (response.success) {
-          workerOutput.textContent = config.workerDone || '';
+          workerOutput.textContent = (response.data && response.data.summary) || config.workerDone || '';
           refreshStats();
         } else {
-          workerOutput.textContent = 'Error: ' + (response.data && response.data.error ? response.data.error : 'unknown');
+          var workerError = response.data && response.data.error ? response.data.error : (ui.unknown || '');
+          var workerAction = response.data && response.data.action ? ' ' + response.data.action : '';
+          workerOutput.textContent = (config.errorPrefix || '') + ' ' + workerError + workerAction;
         }
       });
     });
@@ -166,12 +190,12 @@
       testOutput.value = '';
       postConsole('dolet_console_test_submit', { source_lang: source, target_lang: target, text: text }, function (response) {
         if (!response.success) {
-          appendOutput(testOutput, 'Error: ' + (response.data && response.data.error ? response.data.error : 'unknown'));
+          appendOutput(testOutput, (config.errorPrefix || '') + ' ' + (response.data && response.data.error ? response.data.error : (ui.unknown || '')));
           testButton.disabled = false;
           return;
         }
         var jobId = response.data.job_id;
-        appendOutput(testOutput, 'Job submitted: ' + jobId);
+        appendOutput(testOutput, (ui.jobSubmitted || '') + ' ' + jobId);
         appendOutput(testOutput, config.testPolling || '');
         var pollCount = 0;
         var maxPolls = 30;
@@ -179,24 +203,24 @@
           pollCount++;
           postConsole('dolet_console_test_poll', { job_id: jobId }, function (pollResponse) {
             if (!pollResponse.success) {
-              appendOutput(testOutput, 'Error: ' + (pollResponse.data && pollResponse.data.error ? pollResponse.data.error : 'unknown'));
+              appendOutput(testOutput, (config.errorPrefix || '') + ' ' + (pollResponse.data && pollResponse.data.error ? pollResponse.data.error : (ui.unknown || '')));
               testButton.disabled = false;
               return;
             }
             if (pollResponse.data.status === 'pending') {
-              appendOutput(testOutput, '[Poll ' + pollCount + '] Pending...');
+              appendOutput(testOutput, '[' + pollCount + '] ' + (ui.pollPending || ''));
               if (pollCount < maxPolls) {
                 window.setTimeout(poll, 1000);
               } else {
-                appendOutput(testOutput, 'Timeout after ' + maxPolls + ' polls.');
+                appendOutput(testOutput, ui.pollTimeout || '');
                 testButton.disabled = false;
               }
               return;
             }
             if (pollResponse.data.status === 'success') {
-              appendOutput(testOutput, '[Result] ' + pollResponse.data.reply);
+              appendOutput(testOutput, (ui.result || '') + ' ' + pollResponse.data.reply);
             } else {
-              appendOutput(testOutput, '[Failed] ' + (pollResponse.data.error || 'unknown'));
+              appendOutput(testOutput, (ui.failed || '') + ' ' + (pollResponse.data.error || ui.unknown || ''));
             }
             testButton.disabled = false;
           });
@@ -219,9 +243,9 @@
         refreshButton.disabled = false;
         if (response.success) {
           logArea.value = response.data.log || config.errorLogEmpty || '';
-          lastSuccess.textContent = response.data.lastSuccess || '\u2014';
-          lastError.textContent = response.data.lastError || '\u2014';
-          lastErrorAt.textContent = response.data.lastErrorAt || '\u2014';
+          lastSuccess.textContent = response.data.lastSuccess || ui.notAvailable || '';
+          lastError.textContent = response.data.lastError || ui.notAvailable || '';
+          lastErrorAt.textContent = response.data.lastErrorAt || ui.notAvailable || '';
         }
       });
     });
@@ -236,9 +260,9 @@
         clearButton.disabled = false;
         if (response.success) {
           logArea.value = config.errorLogEmpty || '';
-          lastSuccess.textContent = '\u2014';
-          lastError.textContent = '\u2014';
-          lastErrorAt.textContent = '\u2014';
+          lastSuccess.textContent = ui.notAvailable || '';
+          lastError.textContent = ui.notAvailable || '';
+          lastErrorAt.textContent = ui.notAvailable || '';
         }
       });
     });
@@ -253,24 +277,42 @@
       }
       return;
     }
-    result.textContent = '...';
+    result.textContent = ui.running || '';
     result.style.color = '';
     detail.textContent = '';
-    postDiagnostics('dolet_test_' + testId, function (response) {
+    function finish(response) {
       if (response.success) {
         var passed = response.data.result === 'pass';
-        result.textContent = response.data.result;
+        result.textContent = passed ? (ui.pass || '') : (ui.fail || '');
         result.style.color = passed ? '#46b450' : '#dc3232';
         detail.textContent = response.data.detail || '';
       } else {
-        result.textContent = 'error';
+        result.textContent = ui.error || '';
         result.style.color = '#dc3232';
-        detail.textContent = response.data && response.data.error ? response.data.error : 'AJAX error';
+        detail.textContent = response.data && response.data.error ? response.data.error : (ui.ajaxError || '');
       }
       if (callback) {
         callback();
       }
-    });
+    }
+    function request(jobId, pollCount) {
+      postDiagnostics('dolet_test_' + testId, jobId ? { job_id: jobId } : {}, function (response) {
+        if (response.success && response.data && response.data.result === 'pending' && response.data.job_id) {
+          result.textContent = ui.pending || '';
+          detail.textContent = response.data.detail || '';
+          if (pollCount < 30) {
+            window.setTimeout(function () {
+              request(response.data.job_id, pollCount + 1);
+            }, 1000);
+            return;
+          }
+          finish({ success: true, data: { result: 'fail', detail: ui.diagnosticTimeout || '' } });
+          return;
+        }
+        finish(response);
+      });
+    }
+    request('', 0);
   }
 
   var runButtons = document.querySelectorAll('.dolet-test-run');

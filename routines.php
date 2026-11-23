@@ -21,21 +21,13 @@ if (! defined('ABSPATH')) {
 
 require_once __DIR__ . '/contracts.php';
 
-
-                                                                             
-                              
-                                                                             
-
-   
-                                                        
-   
-interface Routines_AdminSelfTestsInterface
+                                                                   
+interface Routines_SettingsValueInterface
 {
-                                                          
-    public function execute(): void;
-                                          
-    public function renderPanel(): void;
+                                                                      
+    public static function checkbox(mixed $value): bool;
 }
+
 
 
                                                                              
@@ -61,11 +53,12 @@ interface Routines_AdminSelfTestsInterface
    
 final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
 {
+    private bool $reportedInvalidCode = false;
+
     public function __construct(
         private Config_LanguageAdminInterface $langConfig,
         private Config_DebugSettingsInterface $debugSettings,
         private Config_ApproachSettingsInterface $approachSettings,
-        private Language_AliasesDictionaryInterface $aliases,
         private Language_OptionFactoryInterface $optionFactory
     ) {}
 
@@ -85,7 +78,6 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
         });
 
         add_action('admin_init', function (): void {
-            $aliases = $this->aliases;
             $factory = $this->optionFactory;
             $config  = $this->langConfig;
 
@@ -93,21 +85,37 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
 
             register_setting('dolet_settings_group', Config_TranslationOptionNames::FLOATING_SELECTOR_ENABLED, [
                 'type'              => 'boolean',
-                'sanitize_callback' => static fn ($value): bool => in_array($value, [true, 1, '1'], true),
+                'sanitize_callback' => static fn ($value): bool => Routines_SettingsValue::checkbox($value),
                 'default'           => true,
+                'show_in_rest'      => false,
+            ]);
+
+            register_setting('dolet_settings_group', Data_UniversalTableL1_Options::OPTION_DELETE_ON_UNINSTALL, [
+                'type'              => 'boolean',
+                'sanitize_callback' => static fn ($value): bool => Routines_SettingsValue::checkbox($value),
+                'default'           => false,
                 'show_in_rest'      => false,
             ]);
 
                           
             register_setting('dolet_settings_group', Language_AdminOptionNames::SOURCE_CODE, [
                 'type'              => 'string',
-                'sanitize_callback' => function ($v) use ($factory) {
-                    $v = is_string($v) ? trim($v) : '';
-                    if ($v === '' || strtolower($v) === Language_Constants::ORIGINAL) {
+                'sanitize_callback' => function ($v) use ($factory, $config) {
+                    $code = $config->sanitizeCodeInput($v);
+                    if ($code === null) {
+                        if ($v !== null && $v !== '') {
+                            $this->reportInvalidCode();
+                        }
+                        return Language_Constants::ORIGINAL;
+                    }
+                    if (strtolower($code) === Language_Constants::ORIGINAL) {
                         return Language_Constants::ORIGINAL;
                     }
 
-                    $lo = $factory->fromCodeElseNull($v, null);
+                    $lo = $factory->fromCodeElseNull($code, null);
+                    if ($lo === null) {
+                        $this->reportInvalidCode();
+                    }
                     return $lo ? $lo->getCode() : Language_Constants::ORIGINAL;
                 },
                 'default'      => Language_Constants::ORIGINAL,
@@ -117,64 +125,34 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                                
             register_setting('dolet_settings_group', Language_AdminOptionNames::TARGET_LANGUAGES, [
                 'type'              => 'array',
-                'sanitize_callback' => function ($arr) use ($config, $aliases) {
+                'sanitize_callback' => function ($arr) use ($config) {
                     $arr      = is_array($arr) ? $arr : [];
                     $codesReg = Language_Constants::getAllLanguages();
 
-                                                         
-                    $canon = static function (string $code) use ($codesReg, $aliases): ?string {
-                        $code = str_replace('_', '-', trim($code));
-                        if ($code === '') {
-                            return null;
-                        }
-                        $parts    = explode('-', $code);
-                        $parts[0] = strtolower($parts[0]);
-                        for ($i = 1; $i < count($parts); $i++) {
-                            $p         = $parts[$i];
-                            $len       = strlen($p);
-                            $parts[$i] = ($len === 4) ? ucfirst(strtolower($p)) : strtoupper($p);
-                        }
-                        $norm = implode('-', $parts);
-
-                        if (array_key_exists($norm, $codesReg)) {
-                            return $norm;
-                        }
-
-                        $alias = $aliases->isAliasOf($norm);
-                        if ($alias !== null && array_key_exists($alias, $codesReg)) {
-                            return $alias;
-                        }
-
-                        return $norm;
-                    };
-
                     /*
                      * WPORG-REVIEWER-NOTE:
-                     * The options.php request has already passed settings-form capability and nonce checks. Each posted custom-language value is unslashed, trimmed, separator- and case-normalized, mapped to its registry code when it is a known alias, and used only as an allowlist membership key for the separately registered target-language option; generic text sanitization would alter valid custom codes.
+                     * The options.php request has already passed settings-form capability and nonce checks. Each posted custom-language value is unslashed and normalized. New codes must equal sanitize_text_field output and match alphanumeric segments separated by hyphens; exact previously saved identities remain compatible. Only validated posted codes can allow a separately registered target-language value.
                      */
                     $posted = isset($_POST[Language_Constants::CUSTOM_LANGUAGES_LIST_OPTION_NAME])
                         ? wp_unslash($_POST[Language_Constants::CUSTOM_LANGUAGES_LIST_OPTION_NAME])
                         : [];
                     $posted = is_array($posted) ? $posted : [];
                     $postedCustoms = [];
-                    foreach ($posted as $c) {
-                        $n = $canon((string)$c);
-                        if ($n !== null) {
-                            $postedCustoms[$n] = true;
-                        }
+                    foreach ($this->sanitizePostedCodes($posted) as $n) {
+                        $postedCustoms[$n] = true;
                     }
 
-                                                 
-                    $customsPersisted = $config->getCustomCodes();
-                    $customsUnion     = array_fill_keys($customsPersisted, true) + $postedCustoms;
+                                                                            
+                                                                             
+                                                                            
+                    $customsUnion = $postedCustoms;
 
                                      
                     $src = $config->getSourceCode();
 
                     $out = [];
-                    foreach ($arr as $c) {
-                        $n = $canon((string)$c);
-                        if ($n === null || $n === Language_Constants::ORIGINAL || $n === $src) {
+                    foreach ($this->sanitizePostedCodes($arr) as $n) {
+                        if ($n === Language_Constants::ORIGINAL || $n === $src) {
                             continue;
                         }
 
@@ -187,7 +165,7 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                         $out[$n] = true;
                     }
 
-                    $codes = array_keys($out);
+                    $codes = \array_map('strval', \array_keys($out));
                     sort($codes, SORT_STRING);
                     return $codes;
                 },
@@ -199,46 +177,13 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                                           
             register_setting('dolet_settings_group', Language_Constants::CUSTOM_LANGUAGES_LIST_OPTION_NAME, [
                 'type'              => 'array',
-                'sanitize_callback' => function ($arr) use ($aliases) {
+                'sanitize_callback' => function ($arr) {
                     $arr   = is_array($arr) ? $arr : [];
-                    $codes = Language_Constants::getAllLanguages();
-
-                    $canonicalize = static function (string $code) use ($codes, $aliases): ?string {
-                        $code = str_replace('_', '-', trim($code));
-                        if ($code === '') {
-                            return null;
-                        }
-
-                                         
-                        $parts    = explode('-', $code);
-                        $parts[0] = strtolower($parts[0]);
-                        for ($i = 1; $i < count($parts); $i++) {
-                            $p         = $parts[$i];
-                            $len       = strlen($p);
-                            $parts[$i] = ($len === 4) ? ucfirst(strtolower($p)) : strtoupper($p);
-                        }
-                        $norm = implode('-', $parts);
-
-                        if (array_key_exists($norm, $codes)) {
-                            return $norm;                  
-                        }
-
-                        $alias = $aliases->isAliasOf($norm);
-                        if ($alias !== null && array_key_exists($alias, $codes)) {
-                            return $alias;               
-                        }
-
-                        return $norm;                                         
-                    };
-
                     $out = [];
-                    foreach ($arr as $c) {
-                        $n = $canonicalize((string)$c);
-                        if ($n !== null) {
-                            $out[$n] = true;
-                        }
+                    foreach ($this->sanitizePostedCodes($arr) as $n) {
+                        $out[$n] = true;
                     }
-                    $codes = array_keys($out);
+                    $codes = \array_map('strval', \array_keys($out));
                     sort($codes, SORT_STRING);
                     return $codes;
                 },
@@ -254,12 +199,15 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                     $map   = is_array($map) ? $map : [];
                     $clean = [];
                     foreach ($map as $code => $row) {
-                        $code = is_string($code) ? trim($code) : '';
+                        $code = \trim((string) $code);
+                        if (!\is_array($row)) {
+                            continue;
+                        }
                         if ($code === '') {
                             continue;
                         }
-                        $name = isset($row['name']) ? trim((string)$row['name']) : '';
-                        $note = isset($row['note']) ? trim((string)$row['note']) : '';
+                        $name = isset($row['name']) && \is_string($row['name']) ? \trim($row['name']) : '';
+                        $note = isset($row['note']) && \is_string($row['note']) ? \trim($row['note']) : '';
                         $r    = [];
                         if ($name !== '') {
                             $r['name'] = $name;
@@ -319,20 +267,20 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                 'dolet_settings_page'
             );
 
-                                                                             
-            add_settings_field(
-                'dolet_languages_builder',
-                '',
-                [$this, 'renderLanguagesBuilder'],
-                'dolet_settings_page',
-                'dolet_languages_section'
-            );
-
-                                                                             
+                                                                          
             add_settings_field(
                 'dolet_approach_toggle',
                 '',
                 [$this, 'renderApproachToggle'],
+                'dolet_settings_page',
+                'dolet_languages_section'
+            );
+
+                                                                
+            add_settings_field(
+                'dolet_languages_builder',
+                '',
+                [$this, 'renderLanguagesBuilder'],
                 'dolet_settings_page',
                 'dolet_languages_section'
             );
@@ -362,6 +310,14 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                 'dolet_settings_page',
                 'dolet_languages_section'
             );
+
+            add_settings_field(
+                'dolet_delete_on_uninstall',
+                '',
+                [$this, 'renderDeleteOnUninstallToggle'],
+                'dolet_settings_page',
+                'dolet_languages_section'
+            );
         });
     }
 
@@ -370,19 +326,19 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
         $view = new UiWebmaster_DebugToggleView();
         $view->setOptionName(Config_ApproachOptionNames::APPROACH_ENABLED);
         $view->setChecked($this->approachSettings->isEnabled());
-        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('enable_translation_label')) . '</strong> <span style="opacity:.7;">(' . \esc_html(Core_Strings::get('enable_translation_hint')) . ')</span>');
+        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('enable_translation_label')) . '</strong> <span class="dolet-settings-hint">(' . \esc_html(Core_Strings::get('enable_translation_hint')) . ')</span>');
 
-        echo $view->render();
+        echo \wp_kses($view->render(), self::toggleAllowedHtml());
     }
 
     public function renderPreTextareaToggle(): void
     {
         $view = new UiWebmaster_DebugToggleView();
         $view->setOptionName(Config_TranslationOptionNames::TRANSLATE_PRE_TEXTAREA);
-        $view->setChecked((bool) get_option(Config_TranslationOptionNames::TRANSLATE_PRE_TEXTAREA, false));
-        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('translate_pre_textarea_label')) . '</strong> <span style="opacity:.7;">(' . \esc_html(Core_Strings::get('translate_pre_textarea_hint')) . ')</span>');
+        $view->setChecked(Config_OptionValue::boolean(\get_option(Config_TranslationOptionNames::TRANSLATE_PRE_TEXTAREA, false)));
+        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('translate_pre_textarea_label')) . '</strong> <span class="dolet-settings-hint">(' . \esc_html(Core_Strings::get('translate_pre_textarea_hint')) . ')</span>');
 
-        echo $view->render();
+        echo \wp_kses($view->render(), self::toggleAllowedHtml());
     }
 
     public function renderDebugBottom(): void
@@ -390,9 +346,9 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
         $view = new UiWebmaster_DebugToggleView();
         $view->setOptionName(Config_DebugOptionNames::DEBUG_OPTION_NAME);
         $view->setChecked($this->debugSettings->isEnabled());
-        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('debug_label')) . '</strong> <span style="opacity:.7;">(' . \wp_kses_post(Core_Strings::get('debug_hint')) . ')</span>');
+        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('debug_label')) . '</strong> <span class="dolet-settings-hint">(' . \wp_kses_post(Core_Strings::get('debug_hint')) . ')</span>');
 
-        echo $view->render();
+        echo \wp_kses($view->render(), self::toggleAllowedHtml());
     }
 
     public function renderFloatingSelectorToggle(): void
@@ -400,11 +356,23 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
         $optionName = Config_TranslationOptionNames::FLOATING_SELECTOR_ENABLED;
         $view = new UiWebmaster_DebugToggleView();
         $view->setOptionName($optionName);
-        $view->setChecked((bool) get_option($optionName, true));
-        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('floating_selector_label')) . '</strong> <span style="opacity:.7;">(' . \esc_html(Core_Strings::get('floating_selector_hint')) . ')</span>');
+        $view->setChecked(Config_OptionValue::boolean(\get_option($optionName, true)));
+        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('floating_selector_label')) . '</strong> <span class="dolet-settings-hint">(' . \esc_html(Core_Strings::get('floating_selector_hint')) . ')</span>');
 
         echo '<input type="hidden" name="' . \esc_attr($optionName) . '" value="0">';
-        echo $view->render();
+        echo \wp_kses($view->render(), self::toggleAllowedHtml());
+    }
+
+    public function renderDeleteOnUninstallToggle(): void
+    {
+        $optionName = Data_UniversalTableL1_Options::OPTION_DELETE_ON_UNINSTALL;
+        $view = new UiWebmaster_DebugToggleView();
+        $view->setOptionName($optionName);
+        $view->setChecked(Config_OptionValue::boolean(\get_option($optionName, false)));
+        $view->setLabel('<strong>' . \esc_html(Core_Strings::get('delete_on_uninstall_label')) . '</strong> <span class="dolet-settings-hint">(' . \esc_html(Core_Strings::get('delete_on_uninstall_hint')) . ')</span>');
+
+        echo '<input type="hidden" name="' . \esc_attr($optionName) . '" value="0">';
+        echo \wp_kses($view->render(), self::toggleAllowedHtml());
     }
 
     public function renderLanguagesBuilder(): void
@@ -439,7 +407,6 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
 
                                             
         $srcName        = $getDisplayName($srcCode);
-        $srcNote        = $getNote($srcCode);
         $srcDefaultName = $catalog[$srcCode] ?? $srcCode;
 
                                               
@@ -470,7 +437,6 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
         $tpl->setSourceDefaultName($srcDefaultName);
                                                                                                      
         $tpl->setSourceCurrentName(($srcName !== $srcDefaultName) ? $srcName : '');
-        $tpl->setSourceCurrentNote($srcNote);
 
                   
         $tpl->setTargetsHolderDomId('dolet_targets_holder');
@@ -487,6 +453,7 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
                   
         $activeTargetsSet = array_fill_keys($targets, true);
         foreach ($catalogNoOriginal as $code => $name) {
+            $code = (string) $code;
             $disabled = isset($activeTargetsSet[$code]) || ($code === $srcCode);
             $label    = $code . ' — ' . $name;
             $tpl->addPaletteItem(new UiWebmaster_PaletteItemView($code, $label, $disabled));
@@ -497,32 +464,126 @@ final class Routines_AdminLanguagesSettings implements Routine_RoutineInterface
         $tpl->setPaletteAlreadyTitle(Core_Strings::get('palette_already_added'));
 
 
-        echo $tpl->render();
+        echo \wp_kses($tpl->render(), self::languagesBuilderAllowedHtml());
+    }
+
+       
+                                            
+                           
+       
+    private function sanitizePostedCodes(array $values): array
+    {
+        $codes = $this->langConfig->sanitizeCodeInputs($values);
+        if (\count($codes) !== \count($values)) {
+            $this->reportInvalidCode();
+        }
+        return $codes;
+    }
+
+    private function reportInvalidCode(): void
+    {
+        if ($this->reportedInvalidCode) {
+            return;
+        }
+        $this->reportedInvalidCode = true;
+        \add_settings_error('dolet_settings_group', 'sole_translation_language_code_rejected',
+            \esc_html(Core_Strings::get('language_code_rejected')));
+    }
+
+                                                   
+    private static function languagesBuilderAllowedHtml(): array
+    {
+        return [
+            'div' => [
+                'class' => true,
+                'data-custom-list-option' => true,
+                'data-customizations-option' => true,
+                'data-str-note-placeholder' => true,
+                'data-str-no-targets' => true,
+                'data-targets-field' => true,
+                'data-targets-holder-id' => true,
+                'id' => true,
+            ],
+            'h3' => ['class' => true],
+            'p' => ['class' => true],
+            'label' => ['class' => true, 'for' => true],
+            'span' => ['class' => true],
+            'strong' => [],
+            'input' => [
+                'checked' => true,
+                'class' => true,
+                'data-field-base' => true,
+                'data-site-code' => true,
+                'disabled' => true,
+                'aria-controls' => true,
+                'autocomplete' => true,
+                'id' => true,
+                'name' => true,
+                'placeholder' => true,
+                'type' => true,
+                'value' => true,
+            ],
+            'select' => ['class' => true, 'id' => true],
+            'option' => ['selected' => true, 'value' => true],
+            'table' => ['class' => true, 'id' => true],
+            'thead' => [],
+            'tbody' => [],
+            'tr' => ['data-code' => true, 'data-dolet-empty-targets' => true],
+            'th' => ['class' => true],
+            'td' => ['class' => true, 'colspan' => true],
+            'details' => ['class' => true],
+            'summary' => [],
+            'code' => [],
+            'button' => [
+                'class' => true,
+                'data-code' => true,
+                'data-title-add' => true,
+                'data-title-disabled' => true,
+                'disabled' => true,
+                'id' => true,
+                'title' => true,
+                'type' => true,
+            ],
+        ];
+    }
+
+                                                   
+    private static function toggleAllowedHtml(): array
+    {
+        return [
+            'div' => ['class' => true],
+            'label' => ['class' => true],
+            'input' => [
+                'checked' => true,
+                'name' => true,
+                'type' => true,
+                'value' => true,
+            ],
+            'span' => ['class' => true],
+            'strong' => [],
+        ];
     }
 }
 
 
 
-   
-                                                                            
-                                                       
-   
+                                                                                
 final class Routines_AdminSettings implements Routine_RoutineInterface
 {
     private const ASSET_HANDLE = 'dolet-admin-settings';
     private const ASSET_VERSION = '1.0.0';
 
-    private ?Routines_AdminConsole $console = null;
-    private ?Routines_AdminDiagnostics $diagnostics = null;
+    private ?Routines_AdminConsoleInterface $console = null;
+    private ?Routines_AdminDiagnosticsInterface $diagnostics = null;
 
     public function __construct() {}
 
-    public function setConsole(Routines_AdminConsole $console): void
+    public function setConsole(Routines_AdminConsoleInterface $console): void
     {
         $this->console = $console;
     }
 
-    public function setDiagnostics(Routines_AdminDiagnostics $diagnostics): void
+    public function setDiagnostics(Routines_AdminDiagnosticsInterface $diagnostics): void
     {
         $this->diagnostics = $diagnostics;
     }
@@ -541,6 +602,12 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
                 self::ASSET_VERSION,
                 true
             );
+            wp_enqueue_style(
+                self::ASSET_HANDLE,
+                plugin_dir_url(__FILE__) . 'assets/admin-settings.css',
+                [],
+                self::ASSET_VERSION
+            );
             wp_add_inline_script(
                 self::ASSET_HANDLE,
                 'window.doletAdminSettings = ' . wp_json_encode([
@@ -549,9 +616,29 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
                     'diagnosticsNonce'     => wp_create_nonce('dolet_diagnostics'),
                     'workerRunning'        => Core_Strings::get('console_worker_running'),
                     'workerDone'           => Core_Strings::get('console_worker_done'),
+                    'errorPrefix'          => Core_Strings::get('error_prefix'),
                     'testPolling'          => Core_Strings::get('console_test_polling'),
                     'errorLogClearConfirm' => Core_Strings::get('diag_error_log_clear_confirm'),
                     'errorLogEmpty'        => Core_Strings::get('diag_error_log_empty'),
+                    'ui'                   => [
+                        'missingAjaxUrl' => Core_Strings::get('js_missing_ajax_url'),
+                        'invalidJson' => Core_Strings::get('js_invalid_json'),
+                        'httpError' => Core_Strings::get('js_http_error'),
+                        'unknown' => Core_Strings::get('error_unknown'),
+                        'jobSubmitted' => Core_Strings::get('js_job_submitted'),
+                        'pollPending' => Core_Strings::get('js_poll_pending'),
+                        'pollTimeout' => Core_Strings::get('js_poll_timeout'),
+                        'result' => Core_Strings::get('js_result'),
+                        'failed' => Core_Strings::get('js_failed'),
+                        'ajaxError' => Core_Strings::get('js_ajax_error'),
+                        'running' => Core_Strings::get('js_running'),
+                        'pending' => Core_Strings::get('js_pending'),
+                        'pass' => Core_Strings::get('js_pass'),
+                        'fail' => Core_Strings::get('js_fail'),
+                        'error' => Core_Strings::get('js_error'),
+                        'notAvailable' => Core_Strings::get('js_not_available'),
+                        'diagnosticTimeout' => Core_Strings::get('diag_poll_timeout'),
+                    ],
                     'testIds'              => Routines_AdminSelfTests::testIds(),
                 ]) . ';',
                 'before'
@@ -564,7 +651,7 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
                 Config_ApproachOptionNames::APPROACH_ENABLED,
                 [
                     'type'              => 'boolean',
-                    'sanitize_callback' => static fn($v): bool => (bool)$v,
+                    'sanitize_callback' => static fn($v): bool => Routines_SettingsValue::checkbox($v),
                     'default'           => false,
                     'show_in_rest'      => false,
                 ]
@@ -575,7 +662,7 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
                 Config_DebugOptionNames::DEBUG_OPTION_NAME,
                 [
                     'type'              => 'boolean',
-                    'sanitize_callback' => static fn($v): bool => (bool)$v,
+                    'sanitize_callback' => static fn($v): bool => Routines_SettingsValue::checkbox($v),
                     'default'           => false,
                     'show_in_rest'      => false,
                 ]
@@ -586,7 +673,7 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
                 Config_TranslationOptionNames::TRANSLATE_PRE_TEXTAREA,
                 [
                     'type'              => 'boolean',
-                    'sanitize_callback' => static fn($v): bool => (bool)$v,
+                    'sanitize_callback' => static fn($v): bool => Routines_SettingsValue::checkbox($v),
                     'default'           => false,
                     'show_in_rest'      => false,
                 ]
@@ -622,26 +709,27 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
 
                            
         echo '<div id="dolet_tab_settings" class="dolet-tab-panel">';
-        if ($this->console instanceof Routines_AdminConsole) {
-            $this->console->renderProcessingOverview();
-        }
         echo '<form action="options.php" method="post">';
         settings_fields('dolet_settings_group');
         do_settings_sections('dolet_settings_page');
+        echo '<p class="description">' . \esc_html(Core_Strings::get('save_scope')) . '</p>';
         submit_button(\esc_html(Core_Strings::get('save_button')));
         echo '</form>';
+        if ($this->console !== null) {
+            $this->console->renderProcessingOverview();
+        }
         echo '</div>';
 
                           
         echo '<div id="dolet_tab_console" class="dolet-tab-panel" style="display:none;">';
-        if ($this->console instanceof Routines_AdminConsole) {
+        if ($this->console !== null) {
             $this->console->renderPanel();
         }
         echo '</div>';
 
                               
         echo '<div id="dolet_tab_diagnostics" class="dolet-tab-panel" style="display:none;">';
-        if ($this->diagnostics instanceof Routines_AdminDiagnostics) {
+        if ($this->diagnostics !== null) {
             $this->diagnostics->renderPanel();
         }
         echo '</div>';
@@ -656,7 +744,7 @@ final class Routines_AdminSettings implements Routine_RoutineInterface
   
                                                                                             
    
-final class Routines_AdminConsole implements Routine_RoutineInterface
+final class Routines_AdminConsole implements Routines_AdminConsoleInterface
 {
     private const CONSOLE_JOB_TTL = 7200;
 
@@ -675,110 +763,200 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
                                
         add_action('wp_ajax_dolet_console_stats', function (): void {
             if (!current_user_can('manage_options')) {
-                wp_send_json_error(['error' => 'forbidden'], 403);
+                wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
                 return;
             }
             check_ajax_referer('dolet_console');
 
             $repo = new Data_TranslationMemoryRepository();
-            $repo->ensureReady();
-            wp_send_json_success($repo->getStatsByPair());
+            try {
+                $repo->ensureReady();
+                wp_send_json_success($this->configuredStats($repo->getStatsByPair()));
+            } catch (\Throwable $error) {
+                (new Config_DiagnosticsStore())->recordError('translation_stats_unavailable', $error->getMessage());
+                wp_send_json_error(['error' => Core_Strings::get('processing_unavailable')]);
+            }
         });
 
                                        
         add_action('wp_ajax_dolet_console_worker_trigger', function (): void {
             if (!current_user_can('manage_options')) {
-                wp_send_json_error(['error' => 'forbidden'], 403);
+                wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
                 return;
             }
             check_ajax_referer('dolet_console');
 
+            if (!$this->approachSettings->isEnabled()) {
+                wp_send_json_error(['error' => Core_Strings::get('processing_disabled')]);
+                return;
+            }
+
             $credential = $this->credentialReader->read();
-            $credentialError = Routines_EngineCredentialUi::blockingErrorCode($credential['state']);
             if ($credential['ready'] !== true) {
                 wp_send_json_error([
-                    'error' => $credentialError ?? 'engine_unavailable',
-                    'action' => Routines_EngineCredentialUi::actionLabel($credential['state']),
+                    'error' => Routines_EngineCredentialUi::actionLabel($credential['state']),
                 ]);
                 return;
             }
 
             $engine = new Approach_SoleEngineClient();
             if (!$engine->isAvailable()) {
-                wp_send_json_error(['error' => 'SOLE Engine not available.']);
+                wp_send_json_error(['error' => Core_Strings::get('error_engine_unavailable')]);
                 return;
             }
 
-            $repo = new Data_TranslationMemoryRepository();
-            $repo->ensureReady();
-
-            $worker = new Translation_WorkerService(
-                $repo,
-                $engine,
-                $this->debugSettings,
-                $this->approachSettings,
-                new Config_DiagnosticsStore()
+            $diagnostics = new Config_DiagnosticsStore();
+            $lease = new Config_OptionLease(
+                Config_WorkerOptionNames::LEASE,
+                Approach_EngineCallPolicy::workerLeaseSeconds(),
+                $diagnostics,
+                'worker_stale_lock_recovered'
             );
-
-            $result = ['poll' => $worker->pollAndApplyResults()];
-
-            $srcCode = $this->langAdmin->getSourceCode();
-            $targets = $this->langAdmin->getTargetCodes();
-            $submitResults = [];
-
-            foreach ($targets as $tgtCode) {
-                $pair = $this->buildPairOrNull($srcCode, (string)$tgtCode);
-                if ($pair === null) {
-                    continue;
-                }
-                $submitResults[(string)$tgtCode] = $worker->submitPendingFor($pair, 50);
+            if (!$lease->acquire()) {
+                wp_send_json_error(['error' => Core_Strings::get('processing_busy')]);
+                return;
             }
 
-            $result['submit'] = $submitResults;
+            $workerError = null;
+            $result = [];
+            $submitResults = [];
+            try {
+                $retainedIdentityFailures = 0;
+                $representationFailures = 0;
+                $repo = new Data_TranslationMemoryRepository(identityDiagnostics: $diagnostics);
+                $repo->ensureReady();
+                if (!$lease->renew()) {
+                    throw new \RuntimeException('Worker lease ownership was lost.');
+                }
+
+                $worker = new Translation_WorkerService(
+                    $repo,
+                    $engine,
+                    $this->debugSettings,
+                    $this->approachSettings,
+                    $diagnostics,
+                    null,
+                    static function () use ($lease): void {
+                        if (!$lease->renew()) {
+                            throw new \RuntimeException('Worker lease ownership was lost.');
+                        }
+                    }
+                );
+
+                try {
+                    $result = ['poll' => $worker->pollAndApplyResults()];
+                } catch (Data_StoredIdentityMismatchExceptionInterface) {
+                    $retainedIdentityFailures++;
+                }
+                if (!$lease->renew()) {
+                    throw new \RuntimeException('Worker lease ownership was lost.');
+                }
+
+                $srcCode = $this->langAdmin->getSourceCode();
+                $targets = $this->langAdmin->getTargetCodes();
+                foreach ($targets as $tgtCode) {
+                    if (!$lease->renew()) {
+                        throw new \RuntimeException('Worker lease ownership was lost.');
+                    }
+                    $pair = $this->buildPairOrNull($srcCode, (string)$tgtCode);
+                    if ($pair === null) {
+                        continue;
+                    }
+                    try {
+                        $submitResults[(string)$tgtCode] = $worker->submitPendingFor($pair, 50);
+                    } catch (Data_PairRepresentationRejectedExceptionInterface) {
+                                                                                          
+                        $representationFailures++;
+                    } catch (Data_StoredIdentityMismatchExceptionInterface) {
+                        $retainedIdentityFailures++;
+                    }
+                }
+                $result['submit'] = $submitResults;
+                if ($representationFailures > 0) {
+                    $diagnostics->recordError('manual_worker_failed', $representationFailures . ' target representation failure(s); independent work continued.');
+                    $workerError = Core_Strings::get('processing_failed');
+                }
+                if ($retainedIdentityFailures > 0) {
+                    $diagnostics->recordError('manual_worker_failed', $retainedIdentityFailures . ' identity failure(s) retained; independent work continued.');
+                    $workerError = Core_Strings::get('processing_failed');
+                }
+            } catch (\Throwable $error) {
+                $diagnostics->recordError('manual_worker_failed', $error->getMessage());
+                $workerError = Core_Strings::get('processing_failed');
+            } finally {
+                $lease->release();
+            }
+
+            if ($workerError !== null) {
+                wp_send_json_error(['error' => $workerError]);
+                return;
+            }
+
+            $poll = $result['poll'];
+            $submitted = 0;
+            $skipped = 0;
+            foreach ($submitResults as $submitResult) {
+                if (($submitResult['submitted'] ?? false) === true) {
+                    $submitted++;
+                } elseif (($submitResult['skipped'] ?? '') !== '') {
+                    $skipped++;
+                }
+            }
+            $result['summary'] = $this->formatProcessingSummary(
+                (int)($poll['jobs_checked'] ?? 0),
+                (int)($poll['applied'] ?? 0),
+                $submitted,
+                $skipped
+            );
             wp_send_json_success($result);
         });
 
                                                
         add_action('wp_ajax_dolet_console_test_submit', function (): void {
             if (!current_user_can('manage_options')) {
-                wp_send_json_error(['error' => 'forbidden'], 403);
+                wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
                 return;
             }
             check_ajax_referer('dolet_console');
 
-            $srcLang = isset($_POST['source_lang']) && is_string($_POST['source_lang']) ? sanitize_text_field(wp_unslash($_POST['source_lang'])) : '';
-            $tgtLang = isset($_POST['target_lang']) && is_string($_POST['target_lang']) ? sanitize_text_field(wp_unslash($_POST['target_lang'])) : '';
+            $srcLang = $this->readLanguageCode($_POST['source_lang'] ?? '');
+            $tgtLang = $this->readLanguageCode($_POST['target_lang'] ?? '');
+            if ($srcLang === null || $tgtLang === null) {
+                \wp_send_json_error(['error' => Core_Strings::get('console_invalid_pair')]);
+                return;
+            }
             /*
              * WPORG-REVIEWER-NOTE:
-             * This administrator-only AJAX handler verifies manage_options and a nonce before reading input. Single String Test text is opaque valid-UTF-8 transport content passed to a fixed JSON object encoder and Engine submit call; generic text sanitization would change accepted values.
+             * This administrator-only AJAX handler verifies manage_options and a nonce before reading input. Single String Test text is opaque translation content. wp_check_invalid_utf8 and an independent UTF-8 check reject changed or invalid input before a fixed JSON encoder and Engine submit; stripping markup or whitespace would change the requested content.
              */
             $text = isset($_POST['text']) && is_string($_POST['text']) ? wp_unslash($_POST['text']) : '';
 
             if ($tgtLang === '' || $text === '') {
-                wp_send_json_error(['error' => 'target_lang and text are required.']);
+                wp_send_json_error(['error' => Core_Strings::get('console_required_fields')]);
                 return;
             }
-            if (!$this->isValidUtf8($text)) {
-                wp_send_json_error(['error' => 'text must be valid UTF-8.']);
+            $validatedText = \wp_check_invalid_utf8($text);
+            if ($validatedText !== $text || !$this->isValidUtf8($validatedText)) {
+                wp_send_json_error(['error' => Core_Strings::get('console_invalid_utf8')]);
                 return;
             }
 
             if ($this->buildConsolePairOrNull($srcLang, $tgtLang) === null) {
-                wp_send_json_error(['error' => 'Invalid language pair.']);
+                wp_send_json_error(['error' => Core_Strings::get('console_invalid_pair')]);
                 return;
             }
 
             if (!function_exists('sole_engine_llm')) {
-                wp_send_json_error(['error' => 'SOLE Engine not available.']);
+                wp_send_json_error(['error' => Core_Strings::get('error_engine_unavailable')]);
                 return;
             }
 
                                                                                      
                                                                                
             $codec = new Approach_SparseMapCodec();
-            $payload = $codec->encodeSparseMapJson([0 => $text]);
+            $payload = $codec->encodeSparseMapJson([0 => $validatedText]);
             if ($payload === null) {
-                wp_send_json_error(['error' => 'Sparse map encode failed.']);
+                wp_send_json_error(['error' => Core_Strings::get('console_encode_failed')]);
                 return;
             }
 
@@ -791,7 +969,10 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
 
             try {
                                             
-                $ticket = sole_engine_llm()->submit('dolet-wp', 'translate_batch', $payload, $options);
+                $ticket = (new Approach_EngineCallPolicy())->invoke(
+                    static fn () => sole_engine_llm()->submit('dolet-wp', 'translate_batch', $payload, $options),
+                    $diagnostics
+                );
             } catch (\Throwable $e) {
                 $diagnostics->recordError('console_submit_exception', $e->getMessage());
                 wp_send_json_error(['error' => $e->getMessage()]);
@@ -811,7 +992,7 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
             $jobId = $ticket->getJobId();
             if (!is_string($jobId) || !$this->isValidConsoleJobId($jobId)) {
                 $diagnostics->recordError('console_submit_rejected', 'Engine returned an invalid job ID.');
-                wp_send_json_error(['error' => 'Engine returned an invalid job ID.']);
+                wp_send_json_error(['error' => Core_Strings::get('console_invalid_job')]);
                 return;
             }
 
@@ -822,7 +1003,7 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
                                              
         add_action('wp_ajax_dolet_console_test_poll', function (): void {
             if (!current_user_can('manage_options')) {
-                wp_send_json_error(['error' => 'forbidden'], 403);
+                wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
                 return;
             }
             check_ajax_referer('dolet_console');
@@ -833,19 +1014,22 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
              */
             $jobId = isset($_POST['job_id']) && is_string($_POST['job_id']) ? wp_unslash($_POST['job_id']) : '';
             if (!$this->isValidConsoleJobId($jobId) || !$this->ownsConsoleJob($jobId)) {
-                wp_send_json_error(['error' => 'Invalid or unrecognized job_id.']);
+                wp_send_json_error(['error' => Core_Strings::get('console_unknown_job')]);
                 return;
             }
 
             if (!function_exists('sole_engine_llm')) {
-                wp_send_json_error(['error' => 'SOLE Engine not available.']);
+                wp_send_json_error(['error' => Core_Strings::get('error_engine_unavailable')]);
                 return;
             }
 
             $diagnostics = new Config_DiagnosticsStore();
 
             try {
-                $reply = sole_engine_llm()->getResult($jobId);
+                $reply = (new Approach_EngineCallPolicy())->invoke(
+                    static fn () => sole_engine_llm()->getResult($jobId),
+                    $diagnostics
+                );
             } catch (\Throwable $e) {
                 $diagnostics->recordError('console_poll_exception', $e->getMessage());
                 wp_send_json_error(['error' => $e->getMessage()]);
@@ -940,6 +1124,30 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
         );
     }
 
+    private function formatProcessingSummary(int $checked, int $saved, int $sent, int $busy): string
+    {
+        return strtr(Core_Strings::get('processing_summary'), [
+            '{checked}' => (string) $checked,
+            '{saved}' => (string) $saved,
+            '{sent}' => (string) $sent,
+            '{busy}' => (string) $busy,
+        ]);
+    }
+
+    private function readLanguageCode(mixed $value): ?string
+    {
+        if (!\is_string($value)) {
+            return null;
+        }
+        $value = \wp_unslash($value);
+                                                                                      
+        if (\preg_match('//u', $value) !== 1
+            || \preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+            return \sanitize_text_field($value);
+        }
+        return \trim($value);
+    }
+
     private function buildConsolePairOrNull(string $srcCode, string $tgtCode): ?Language_PairInterface
     {
         if ($srcCode !== $this->langAdmin->getSourceCode()) {
@@ -990,8 +1198,14 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
     {
         $repo = new Data_TranslationMemoryRepository();
         $pending = 0;
-        foreach ($repo->getStatsByPair() as $stats) {
-            $pending += $stats['pending'];
+        $pendingLabel = null;
+        try {
+            foreach ($this->configuredStats($repo->getStatsByPair()) as $stats) {
+                $pending += $stats['pending'];
+            }
+        } catch (\Throwable $error) {
+            (new Config_DiagnosticsStore())->recordError('translation_stats_unavailable', $error->getMessage());
+            $pendingLabel = Core_Strings::get('processing_unavailable');
         }
 
         $lastSuccess = (new Config_DiagnosticsStore())->getLastSuccess();
@@ -1006,20 +1220,42 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
 
         echo '<div class="notice notice-info inline" style="max-width:700px;padding:12px 16px;margin:16px 0;">';
         echo '<h2 style="margin-top:0;">' . \esc_html(Core_Strings::get('processing_heading')) . '</h2>';
-        if (Config_InstallationState::isProcessingNoteVisible()) {
-            echo '<p>' . \esc_html(Core_Strings::get('processing_note')) . '</p>';
+        echo '<p>' . \esc_html(Core_Strings::get('processing_note')) . '</p>';
+        $translationEnabled = $this->approachSettings->isEnabled();
+        $credential = $this->credentialReader->read();
+        $processingReady = $translationEnabled && $credential['ready'] === true;
+        if (!$translationEnabled) {
+            echo '<p><strong>' . \esc_html(Core_Strings::get('processing_disabled')) . '</strong></p>';
+        } elseif (!$processingReady) {
+            echo '<p><strong>' . \esc_html(Routines_EngineCredentialUi::actionLabel($credential['state'])) . '</strong></p>';
         }
         echo '<table class="widefat striped" style="max-width:680px;"><tbody>';
         echo '<tr><th scope="row">' . \esc_html(Core_Strings::get('processing_pending')) . '</th>';
-        echo '<td id="dolet_processing_pending">' . \esc_html((string)$pending) . '</td></tr>';
+        echo '<td id="dolet_processing_pending">' . \esc_html($pendingLabel ?? (string)$pending) . '</td></tr>';
         echo '<tr><th scope="row">' . \esc_html(Core_Strings::get('processing_last_success')) . '</th>';
         echo '<td>' . \esc_html($lastSuccessLabel) . '</td></tr>';
         echo '<tr><th scope="row">' . \esc_html(Core_Strings::get('processing_next_scheduled')) . '</th>';
         echo '<td>' . \esc_html($nextScheduledLabel) . '</td></tr>';
         echo '</tbody></table>';
-        echo '<p><button type="button" class="button button-primary" id="dolet_worker_trigger">' . \esc_html(Core_Strings::get('console_worker_trigger')) . '</button> ';
+        echo '<p><button type="button" class="button button-primary" id="dolet_worker_trigger"' . ($processingReady ? '' : ' disabled') . '>' . \esc_html(Core_Strings::get('console_worker_trigger')) . '</button> ';
         echo '<span id="dolet_worker_output" role="status" aria-live="polite"></span></p>';
         echo '</div>';
+    }
+
+       
+                                                                                                                                         
+                                                                                                                                   
+       
+    private function configuredStats(array $stats): array
+    {
+        $source = $this->langAdmin->getSourceCode();
+        $targets = array_map('strval', $this->langAdmin->getTargetCodes());
+
+        return array_values(array_filter(
+            $stats,
+            static fn(array $row): bool => in_array($row['tgt'], $targets, true)
+                && ($source === Language_Constants::ORIGINAL || $row['src'] === $source)
+        ));
     }
 }
 
@@ -1027,9 +1263,9 @@ final class Routines_AdminConsole implements Routine_RoutineInterface
    
                                                                                
    
-final class Routines_AdminDiagnostics implements Routine_RoutineInterface
+final class Routines_AdminDiagnostics implements Routines_AdminDiagnosticsInterface
 {
-    private ?Routines_AdminSelfTests $selfTests = null;
+    private ?Routines_AdminSelfTestsInterface $selfTests = null;
 
     public function __construct(
         private Config_LanguageAdminInterface $langAdmin,
@@ -1040,7 +1276,7 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
         $this->credentialReader ??= new Approach_EngineCredentialReadinessReader();
     }
 
-    public function setSelfTests(Routines_AdminSelfTests $selfTests): void
+    public function setSelfTests(Routines_AdminSelfTestsInterface $selfTests): void
     {
         $this->selfTests = $selfTests;
     }
@@ -1050,13 +1286,13 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
                                    
         \add_action('wp_ajax_dolet_refresh_error_log', function (): void {
             if (!\current_user_can('manage_options')) {
-                \wp_send_json_error(['error' => 'forbidden'], 403);
+                \wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
                 return;
             }
             \check_ajax_referer('dolet_diagnostics');
 
             if ($this->diagnosticsStore === null) {
-                \wp_send_json_error(['error' => 'Diagnostics store not available.']);
+                \wp_send_json_error(['error' => Core_Strings::get('error_diagnostics_unavailable')]);
                 return;
             }
 
@@ -1064,7 +1300,7 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
             \wp_send_json_success([
                 'log'         => $this->formatErrorLogLines($log),
                 'lastSuccess' => $this->diagnosticsStore->getLastSuccess(),
-                'lastError'   => $this->diagnosticsStore->getLastError(),
+                'lastError'   => $this->displayError($this->diagnosticsStore->getLastError()),
                 'lastErrorAt' => $this->diagnosticsStore->getLastErrorAt(),
             ]);
         });
@@ -1072,13 +1308,13 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
                                  
         \add_action('wp_ajax_dolet_clear_error_log', function (): void {
             if (!\current_user_can('manage_options')) {
-                \wp_send_json_error(['error' => 'forbidden'], 403);
+                \wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
                 return;
             }
             \check_ajax_referer('dolet_diagnostics');
 
             if ($this->diagnosticsStore === null) {
-                \wp_send_json_error(['error' => 'Diagnostics store not available.']);
+                \wp_send_json_error(['error' => Core_Strings::get('error_diagnostics_unavailable')]);
                 return;
             }
 
@@ -1101,17 +1337,18 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
         echo '<tr><td><span style="color:' . \esc_attr($engineColor) . ';">&#9679;</span> ' . \esc_html($engineLabel) . '</td></tr>';
         echo '<tr><td><strong>' . \esc_html(Core_Strings::get('diag_engine_action_label')) . ':</strong> '
             . \esc_html(Routines_EngineCredentialUi::actionLabel($credential['state'])) . '</td></tr>';
-
                                
         $translationEnabled = $this->approachSettings->isEnabled();
         $translationLabel = $translationEnabled ? Core_Strings::get('diag_translation_enabled') : Core_Strings::get('diag_translation_disabled');
-        $translationColor = $translationEnabled ? '#46b450' : '#dc3232';
+        $translationColor = $translationEnabled ? '#46b450' : '#646970';
         echo '<tr><td><span style="color:' . \esc_attr($translationColor) . ';">&#9679;</span> ' . \esc_html($translationLabel) . '</td></tr>';
 
                              
         $cronScheduled = (\wp_next_scheduled('dolet_translation_worker_tick') !== false);
-        $cronLabel = $cronScheduled ? Core_Strings::get('diag_cron_scheduled') : Core_Strings::get('diag_cron_not_scheduled');
-        $cronColor = $cronScheduled ? '#46b450' : '#ffb900';
+        $cronLabel = $cronScheduled
+            ? Core_Strings::get('diag_cron_scheduled')
+            : Core_Strings::get($translationEnabled ? 'diag_cron_not_scheduled' : 'diag_cron_disabled');
+        $cronColor = $cronScheduled ? '#46b450' : ($translationEnabled ? '#ffb900' : '#646970');
         echo '<tr><td><span style="color:' . \esc_attr($cronColor) . ';">&#9679;</span> ' . \esc_html($cronLabel) . '</td></tr>';
 
                            
@@ -1126,11 +1363,15 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
                                 
         $srcCode = $this->langAdmin->getSourceCode();
         $targets = $this->langAdmin->getTargetCodes();
-        $langSummary = 'Source: ' . $srcCode . ' | Targets: ' . (empty($targets) ? '(none)' : implode(', ', array_map('strval', $targets)));
+        $langSummary = strtr(Core_Strings::get('diag_languages_summary'), [
+            '{source}' => $srcCode,
+            '{targets}' => empty($targets)
+                ? Core_Strings::get('diag_languages_none')
+                : implode(', ', array_map('strval', $targets)),
+        ]);
         echo '<tr><td><strong>' . \esc_html(Core_Strings::get('diag_languages_label')) . ':</strong> ' . \esc_html($langSummary) . '</td></tr>';
 
         echo '</tbody></table>';
-
                                    
         if ($this->diagnosticsStore !== null) {
             echo '<hr>';
@@ -1138,7 +1379,7 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
 
                                           
             $lastSuccess = $this->diagnosticsStore->getLastSuccess();
-            $lastError   = $this->diagnosticsStore->getLastError();
+            $lastError   = $this->displayError($this->diagnosticsStore->getLastError());
             $lastErrorAt = $this->diagnosticsStore->getLastErrorAt();
 
             echo '<table class="widefat fixed" style="max-width:600px;" id="dolet_diag_summary">';
@@ -1170,6 +1411,17 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
         }
     }
 
+    private function displayError(?string $code): ?string
+    {
+        $reason = Core_HtmlRejection::fromCode($code);
+        if ($reason === null) {
+            return $code;
+        }
+        $label = $reason->label();
+        return $code === $reason->code(true)
+            ? Core_Strings::get('diag_candidate_prefix') . ': ' . $label : $label;
+    }
+
        
                                               
       
@@ -1185,6 +1437,7 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
             $time    = (string)($entry['time'] ?? '');
             $code    = (string)($entry['code'] ?? '');
             $context = (string)($entry['context'] ?? '');
+            $context = Core_HtmlRejection::fromCode($code) !== null ? ($this->displayError($code) ?? $context) : $context;
             $lines[] = '[' . $time . '] ' . $code . ': ' . $context;
         }
         return implode("\n", $lines);
@@ -1199,6 +1452,7 @@ final class Routines_AdminDiagnostics implements Routine_RoutineInterface
    
 final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
 {
+    private const FLOW_JOB_TTL = 600;
                                                       
     private const TESTS = [
         ['id' => 'engine_available',  'descKey' => 'diag_test_engine_available'],
@@ -1283,7 +1537,8 @@ final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
             echo '<td>' . \esc_html(Core_Strings::get($descKey)) . '</td>';
             echo '<td id="dolet_test_result_' . \esc_attr($testId) . '">—</td>';
             echo '<td id="dolet_test_detail_' . \esc_attr($testId) . '"></td>';
-            echo '<td><button type="button" class="button dolet-test-run" data-test="' . \esc_attr($testId) . '">Run</button></td>';
+            echo '<td><button type="button" class="button dolet-test-run" data-test="' . \esc_attr($testId) . '">'
+                . \esc_html(Core_Strings::get('diag_test_run')) . '</button></td>';
             echo '</tr>';
         }
 
@@ -1315,15 +1570,16 @@ final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
 
         $targets = $this->langAdmin->getTargetCodes();
         if (empty($targets)) {
-            $issues[] = 'No target languages configured.';
-        }
-
-        if (!$this->approachSettings->isEnabled()) {
-            $issues[] = 'Translation approach is disabled.';
+            $issues[] = Core_Strings::get('diag_no_targets');
         }
 
         if (empty($issues)) {
-            \wp_send_json_success(['result' => 'pass', 'detail' => 'Source: ' . $srcCode . ', Targets: ' . implode(', ', $targets)]);
+            $state = Core_Strings::get($this->approachSettings->isEnabled() ? 'diag_state_enabled' : 'diag_state_disabled');
+            \wp_send_json_success(['result' => 'pass', 'detail' => self::text('diag_config_summary', [
+                '{source}' => $srcCode,
+                '{targets}' => implode(', ', $targets),
+                '{state}' => $state,
+            ])]);
         } else {
             \wp_send_json_success(['result' => 'fail', 'detail' => implode(' ', $issues)]);
         }
@@ -1340,9 +1596,9 @@ final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
 
             $exists = ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $tableName)) === $tableName);
             if ($exists) {
-                \wp_send_json_success(['result' => 'pass', 'detail' => 'Table ' . $tableName . ' exists and ensureReady() succeeded.']);
+                \wp_send_json_success(['result' => 'pass', 'detail' => self::text('diag_table_ready', ['{table}' => $tableName])]);
             } else {
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Table ' . $tableName . ' does not exist after ensureReady().']);
+                \wp_send_json_success(['result' => 'fail', 'detail' => self::text('diag_table_not_ready', ['{table}' => $tableName])]);
             }
         } catch (\Throwable $e) {
             \wp_send_json_success(['result' => 'fail', 'detail' => $e->getMessage()]);
@@ -1354,33 +1610,35 @@ final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
         try {
             $codec = new Approach_SparseMapCodec();
 
-            $original = ['0' => 'Hello world', '1' => 'Test string', '5' => 'Sparse key'];
+            $original = [0 => 'Hello world', 1 => 'Test string', 5 => 'Sparse key'];
             $encoded = $codec->encodeSparseMapJson($original);
             if (!is_string($encoded)) {
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Encode returned null.']);
+                \wp_send_json_success(['result' => 'fail', 'detail' => Core_Strings::get('diag_codec_encode_failed')]);
                 return;
             }
 
             $decoded = $codec->parseSparseMapJsonOrNull($encoded, null);
             if ($decoded === null) {
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Decode returned null from: ' . $encoded]);
+                \wp_send_json_success(['result' => 'fail', 'detail' => Core_Strings::get('diag_codec_decode_failed')]);
                 return;
             }
 
-                                                        
+                                                              
             $match = true;
             foreach ($original as $k => $v) {
-                $dk = (string)$k;
-                if (!array_key_exists($dk, $decoded) || $decoded[$dk] !== $v) {
+                if (!array_key_exists($k, $decoded) || $decoded[$k] !== $v) {
                     $match = false;
                     break;
                 }
             }
 
             if ($match && count($decoded) === count($original)) {
-                \wp_send_json_success(['result' => 'pass', 'detail' => 'Roundtrip OK (' . count($original) . ' keys).']);
+                \wp_send_json_success(['result' => 'pass', 'detail' => self::text('diag_codec_pass', ['{count}' => (string) count($original)])]);
             } else {
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Mismatch after roundtrip. Original: ' . count($original) . ' keys, Decoded: ' . count($decoded) . ' keys.']);
+                \wp_send_json_success(['result' => 'fail', 'detail' => self::text('diag_codec_mismatch', [
+                    '{original}' => (string) count($original),
+                    '{decoded}' => (string) count($decoded),
+                ])]);
             }
         } catch (\Throwable $e) {
             \wp_send_json_success(['result' => 'fail', 'detail' => $e->getMessage()]);
@@ -1390,72 +1648,124 @@ final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
     private function runSubmitPollFlow(): void
     {
         if (!\function_exists('sole_engine_llm')) {
-            \wp_send_json_success(['result' => 'fail', 'detail' => 'SOLE Engine not available.']);
+            \wp_send_json_success(['result' => 'fail', 'detail' => Core_Strings::get('error_engine_unavailable')]);
+            return;
+        }
+
+        $postedJobId = isset($_POST['job_id']) && is_string($_POST['job_id'])
+            ? wp_unslash($_POST['job_id'])
+            : '';
+        if ($postedJobId !== '') {
+            $this->pollSubmitFlowOnce($postedJobId);
             return;
         }
 
         $targets = $this->langAdmin->getTargetCodes();
         if (empty($targets)) {
-            \wp_send_json_success(['result' => 'fail', 'detail' => 'No target languages configured.']);
+            \wp_send_json_success(['result' => 'fail', 'detail' => Core_Strings::get('diag_no_targets')]);
             return;
         }
 
         $tgtCode = $targets[0];
 
         try {
-                                                                                     
-                                                                               
-            $codec = new Approach_SparseMapCodec();
-            $payload = $codec->encodeSparseMapJson([0 => 'Hello']);
-            if ($payload === null) {
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Sparse map encode failed.']);
-                return;
-            }
-
             $options = ['targetLanguage' => $tgtCode];
             $srcCode = $this->langAdmin->getSourceCode();
             if ($srcCode !== '' && strcasecmp($srcCode, 'original') !== 0) {
                 $options['sourceLanguage'] = $srcCode;
             }
 
-                                        
-            $ticket = \sole_engine_llm()->submit('dolet-wp', 'translate_batch', $payload, $options);
+            $ticket = (new Approach_EngineCallPolicy())->invoke(
+                static fn () => \sole_engine_llm()->submit('dolet-wp', 'translate', 'Hello', $options),
+                new Config_DiagnosticsStore()
+            );
             if (!$ticket->wasAccepted()) {
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Submit rejected: ' . ($ticket->getError() ?? 'unknown')]);
+                \wp_send_json_success(['result' => 'fail', 'detail' => self::text('diag_submit_rejected', [
+                    '{error}' => $ticket->getError() ?? Core_Strings::get('error_unknown'),
+                ])]);
                 return;
             }
 
             $jobId = $ticket->getJobId();
-            $maxPolls = 5;
-
-            for ($i = 0; $i < $maxPolls; $i++) {
-                sleep(2);
-                $reply = \sole_engine_llm()->getResult($jobId);
-
-                if ($reply->isPending()) {
-                    continue;
-                }
-
-                if ($reply->isSuccessful()) {
-                    $replyText = $reply->getReply();
-                    \wp_send_json_success(['result' => 'pass', 'detail' => 'Job ' . $jobId . ' completed. Reply: ' . (is_string($replyText) ? substr($replyText, 0, 200) : '(non-string)')]);
-                    return;
-                }
-
-                \wp_send_json_success(['result' => 'fail', 'detail' => 'Job ' . $jobId . ' failed: ' . ($reply->getError() ?? 'unknown')]);
+            if (!is_string($jobId) || !$this->validFlowJobId($jobId)) {
+                \wp_send_json_success(['result' => 'fail', 'detail' => Core_Strings::get('console_invalid_job')]);
                 return;
             }
-
-            \wp_send_json_success(['result' => 'fail', 'detail' => 'Job ' . $jobId . ' still pending after ' . $maxPolls . ' polls.']);
+            \set_transient($this->flowJobKey($jobId), 'owned', self::FLOW_JOB_TTL);
+            \wp_send_json_success([
+                'result' => 'pending',
+                'detail' => Core_Strings::get('diag_job_submitted'),
+                'job_id' => $jobId,
+            ]);
         } catch (\Throwable $e) {
             \wp_send_json_success(['result' => 'fail', 'detail' => $e->getMessage()]);
         }
     }
 
+    private function pollSubmitFlowOnce(string $jobId): void
+    {
+        if (!$this->validFlowJobId($jobId) || \get_transient($this->flowJobKey($jobId)) !== 'owned') {
+            \wp_send_json_success(['result' => 'fail', 'detail' => Core_Strings::get('diag_job_unknown')]);
+            return;
+        }
+
+        try {
+            $reply = (new Approach_EngineCallPolicy())->invoke(
+                static fn () => \sole_engine_llm()->getResult($jobId),
+                new Config_DiagnosticsStore()
+            );
+            if ($reply->isPending()) {
+                \wp_send_json_success([
+                    'result' => 'pending',
+                    'detail' => Core_Strings::get('diag_job_pending'),
+                    'job_id' => $jobId,
+                ]);
+                return;
+            }
+            \delete_transient($this->flowJobKey($jobId));
+            if ($reply->isSuccessful()) {
+                $replyText = $reply->getReply();
+                \wp_send_json_success([
+                    'result' => 'pass',
+                    'detail' => self::text('diag_job_complete', [
+                        '{reply}' => is_string($replyText) ? substr($replyText, 0, 200) : Core_Strings::get('error_unknown'),
+                    ]),
+                ]);
+                return;
+            }
+            \wp_send_json_success(['result' => 'fail', 'detail' => self::text('diag_job_failed', [
+                '{error}' => $reply->getError() ?? Core_Strings::get('error_unknown'),
+            ])]);
+        } catch (\Throwable $error) {
+            \delete_transient($this->flowJobKey($jobId));
+            \wp_send_json_success(['result' => 'fail', 'detail' => $error->getMessage()]);
+        }
+    }
+
+    private function validFlowJobId(string $jobId): bool
+    {
+        $length = strlen($jobId);
+        return $length >= 1
+            && $length <= 255
+            && preg_match('//u', $jobId) === 1
+            && preg_match('/[\x00-\x20\x7f]/', $jobId) !== 1;
+    }
+
+    private function flowJobKey(string $jobId): string
+    {
+        return 'dolet_self_test_job_' . get_current_user_id() . '_' . hash('sha256', $jobId);
+    }
+
+                                                    
+    private static function text(string $key, array $replacements): string
+    {
+        return strtr(Core_Strings::get($key), $replacements);
+    }
+
     private function requireCap(): void
     {
         if (!\current_user_can('manage_options')) {
-            \wp_send_json_error(['error' => 'forbidden'], 403);
+            \wp_send_json_error(['error' => Core_Strings::get('error_forbidden')], 403);
             exit;
         }
     }
@@ -1467,45 +1777,45 @@ final class Routines_AdminSelfTests implements Routines_AdminSelfTestsInterface
                                                                           
                                          
   
-                                                                        
+                                                                    
                                                                                
-                                                                       
+                                                                                                             
   
                                                            
                                                          
   
-                                                                             
+                                                                              
                                                     
-                                                                             
+                                                                              
                                      
-                                                                           
-                                                                         
-                                                                           
-                                                                         
-                   
-  
-                                                                          
                                                                             
+                                                                          
+                                                                           
+  
+                                                                       
+                                                                             
+                                                                         
    
 final class Routines_AutoTranslate implements Routine_RoutineInterface
 {
     private const CALLER_ID = 'dolet-wp';
                                                                                  
     private const TASK = 'translate';
-                                                                                
-                                                                   
-    private const SUBMIT_BATCH_LIMIT = 15;
-                                                                              
                                                                              
-                                   
-    private const SUBMIT_DRAIN_DEADLINE = 1800;
-                                                                              
+                                                                          
+    private const SUBMIT_BATCH_LIMIT = 15;
+                                                                           
+                                                                               
     private const COLLECT_STALE_SECONDS = 600;
+                                                                                 
+    private const COLLECT_MAX_AGE_SECONDS = 25 * 60 * 60;
                                                                              
     private const FAILURE_COOLDOWN_SECONDS = 3600;
 
     private string $dir;
     private Diagnostics_StoreInterface $diagnostics;
+    private ?Config_OptionLease $activeLease = null;
+    private ?string $credentialCheckedAt = null;
 
     public function __construct(
         ?string $dir = null,
@@ -1519,10 +1829,43 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
 
     public function execute(): void
     {
-        \add_action('admin_init', [$this, 'maybeTranslate']);
+        \add_action('dolet_translation_worker_tick', [$this, 'maybeTranslate'], 20);
     }
 
     public function maybeTranslate(): void
+    {
+        $lease = new Config_OptionLease(
+            Core_StringsOptionNames::AUTOTRANSLATE_LOCK,
+            self::leaseSeconds(),
+            $this->diagnostics,
+            'autotranslate_stale_lock_recovered'
+        );
+        if (!$lease->acquire()) {
+            return;
+        }
+        $this->activeLease = $lease;
+        try {
+            $this->runCycle();
+        } catch (Routines_AutoTranslateFailure $error) {
+            if ($error->getCode() !== Routines_AutoTranslateFailure::LEASE_LOST
+                && $this->diagnostics->getLastError() !== 'autotranslate_failed') {
+                $this->diagnostics->recordError(
+                    'autotranslate_failed',
+                    'UI-string translation checkpoint could not be saved; further submissions stopped.'
+                );
+            }
+        } finally {
+            $lease->release();
+            $this->activeLease = null;
+        }
+    }
+
+    public static function leaseSeconds(): int
+    {
+        return Approach_EngineCallPolicy::workerLeaseSeconds();
+    }
+
+    private function runCycle(): void
     {
                                                                       
                                                                   
@@ -1569,6 +1912,7 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         }
 
         $credential = $this->credentialReader->read();
+        $this->credentialCheckedAt = $credential['checked_at'];
         $credentialError = Routines_EngineCredentialUi::blockingErrorCode($credential['state']);
 
         if ($status === 'failed') {
@@ -1580,25 +1924,27 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
                                                                               
                                                                            
                                                                    
-            $readinessRecovered = $credential['ready'] === true;
+            $verificationChanged = isset($state['credential_checked_at'])
+                && $state['credential_checked_at'] !== $credential['checked_at'];
+            $readinessRecovered = $credential['ready'] === true
+                && ($failedCredentialState !== Approach_EngineCredentialStates::VERIFIED || $verificationChanged);
             $credentialStateChanged = $failedCredentialState !== $credential['state']
                 && $failedCredentialState !== Approach_EngineCredentialStates::UNAVAILABLE
                 && $credential['state'] !== Approach_EngineCredentialStates::UNAVAILABLE;
             if ($wasCredentialFailure && ($readinessRecovered || $credentialStateChanged)) {
-                \delete_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE);
-                $state = null;
-                $status = '';
+                $state['failed_at'] = 0;
             }
 
                                                                                  
                                                                         
-            if ($status === 'failed' && ($state['failed_at'] ?? 0) > \time() - self::FAILURE_COOLDOWN_SECONDS) {
+            if (($state['failed_at'] ?? 0) > \time() - self::FAILURE_COOLDOWN_SECONDS) {
                 return;
             }
-            if ($status === 'failed') {
-                \delete_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE);
-                $status = '';
-            }
+            $status = is_string($state['resume_status'] ?? null) ? $state['resume_status'] : '';
+            $state['status'] = $status;
+            if ($status === 'pending') { $state['last_progress_at'] = \time(); }
+            unset($state['resume_status'], $state['failure_code'], $state['failed_at']);
+            $this->saveState($state);
         }
 
         if ($credential['ready'] !== true) {
@@ -1613,34 +1959,20 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         }
 
         if ($status === 'submitting' && $state !== null) {
-            if (($state['started_at'] ?? 0) < \time() - self::SUBMIT_DRAIN_DEADLINE) {
-                                                                           
-                                                                           
-                                                                             
-                                                      
-                $this->enterFailed($locale, $version, 'submit drain did not finish within the deadline');
-                return;
-            }
             $jobs = \is_array($state['jobs'] ?? null) ? $state['jobs'] : [];
+            $failedKeys = \is_array($state['failed_keys'] ?? null) ? $state['failed_keys'] : [];
             $startedAt = (int) ($state['started_at'] ?? \time());
-            $this->submitDrain($locale, $version, $strings, $jobs, $startedAt, $credential['state']);
+            $this->submitDrain($locale, $version, $strings, $jobs, $failedKeys, $startedAt, $credential['state']);
             return;
         }
 
         if ($status === 'pending' && $state !== null) {
-            if (($state['submitted_at'] ?? 0) < \time() - self::COLLECT_STALE_SECONDS) {
-                                                                           
-                                                                          
-                                                            
-                $this->enterFailed($locale, $version, 'translation jobs did not resolve within the deadline');
-                return;
-            }
             $this->collect($locale, $version, $state, $credential['state']);
             return;
         }
 
                                                    
-        $this->submitDrain($locale, $version, $strings, [], \time(), $credential['state']);
+        $this->submitDrain($locale, $version, $strings, [], [], \time(), $credential['state']);
     }
 
        
@@ -1649,12 +1981,14 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
       
                                                       
                                                            
+                                      
        
     private function submitDrain(
         string $locale,
         string $version,
         array $strings,
         array $jobs,
+        array $failedKeys,
         int $startedAt,
         string $credentialState
     ): void
@@ -1666,6 +2000,15 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         foreach ($jobs as $job) {
             $submittedKeys[$job['key']] = true;
         }
+        foreach ($failedKeys as $failedKey) {
+            $submittedKeys[(string) $failedKey] = true;
+        }
+
+        $checkpoint = [
+            'status' => 'submitting', 'locale' => $locale, 'version' => $version,
+            'jobs' => $jobs, 'failed_keys' => $failedKeys, 'started_at' => $startedAt,
+        ];
+        $this->saveState($checkpoint);
 
         $submittedThisLoad = 0;
         foreach ($strings as $key => $value) {
@@ -1682,25 +2025,71 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
             if (!\is_string($value)) {
                 continue;
             }
-            $ticket = $engine->submit(self::CALLER_ID, self::TASK, $value, ['targetLanguage' => $lang]);
+            if (!$this->renewActiveLease()) {
+                return;
+            }
+                                                                           
+                                                                            
+                                                                              
+            $checkpoint['failed_keys'] = [...$failedKeys, $key];
+            $this->saveState($checkpoint);
+            try {
+                $ticket = (new Approach_EngineCallPolicy())->invoke(
+                    static fn () => $engine->submit(
+                        self::CALLER_ID,
+                        self::TASK,
+                        $value,
+                        ['targetLanguage' => $lang]
+                    ),
+                    $this->diagnostics
+                );
+            } catch (\Throwable $e) {
+                                                                           
+                                                                                
+                $this->enterFailed(
+                    $locale,
+                    $version,
+                    'submit exception',
+                    'autotranslate_submit_exception',
+                    $credentialState
+                );
+                return;
+            }
             $submittedThisLoad++;
             if ($ticket->wasAccepted()) {
                 $jobId = $ticket->getJobId();
                 if ($jobId !== null && $jobId !== '') {
                     $jobs[] = ['key' => $key, 'jobId' => $jobId];
                     $submittedKeys[$key] = true;
+                } else {
+                    $failedKeys[] = $key;
+                    $submittedKeys[$key] = true;
+                    if ($this->diagnostics->getLastError() !== 'autotranslate_string_rejected') {
+                        $this->diagnostics->recordError('autotranslate_string_rejected', 'Accepted UI-string job has no identity; English fallback retained.');
+                    }
                 }
             } else {
                 $error = $ticket->getError() ?? 'submit rejected';
                 if (in_array($error, ['config_missing', 'user_key_invalid'], true)) {
+                    $checkpoint['failed_keys'] = $failedKeys;
+                    $this->saveState($checkpoint);
                     $this->enterFailed($locale, $version, $error, $error, $credentialState);
                     return;
                 }
-                                                                              
-                                                                             
-                                                                           
+                if (!in_array($key, $failedKeys, true)) {
+                    $failedKeys[] = $key;
+                }
+                if ($this->diagnostics->getLastError() !== 'autotranslate_string_rejected') {
+                    $this->diagnostics->recordError(
+                        'autotranslate_string_rejected',
+                        'UI-string auto-translate rejected one or more strings; English fallback retained.'
+                    );
+                }
                 $submittedKeys[$key] = true;
             }
+            $checkpoint['jobs'] = $jobs;
+            $checkpoint['failed_keys'] = $failedKeys;
+            $this->saveState($checkpoint);
         }
 
         $remaining = 0;
@@ -1711,25 +2100,29 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         }
 
         if ($remaining > 0) {
-            \update_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE, [
+            $this->saveState([
                 'status'     => 'submitting',
                 'locale'     => $locale,
                 'version'    => $version,
                 'jobs'       => $jobs,
+                'failed_keys' => $failedKeys,
                 'started_at' => $startedAt,
-            ], 'yes');
+            ]);
             return;
         }
 
                                                                       
-        \update_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE, [
+        $this->saveState([
             'status'       => 'pending',
             'locale'       => $locale,
             'version'      => $version,
             'jobs'         => $jobs,
+            'failed_keys'  => $failedKeys,
+            'translated'   => [],
             'started_at'   => $startedAt,
             'submitted_at' => \time(),
-        ], 'yes');
+            'last_progress_at' => \time(),
+        ]);
     }
 
        
@@ -1742,40 +2135,85 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         $engine = \sole_engine_llm();
         $jobs = \is_array($state['jobs'] ?? null) ? $state['jobs'] : [];
 
-        $translated = [];
+        $translated = \is_array($state['translated'] ?? null) ? $state['translated'] : [];
+        $failedKeys = \is_array($state['failed_keys'] ?? null) ? $state['failed_keys'] : [];
         $pending = [];
-        foreach ($jobs as $job) {
-            $reply = $engine->getResult($job['jobId']);
-            if ($reply->isPending()) {
+        $pollException = false;
+        $tooOld = ($state['submitted_at'] ?? $state['started_at'] ?? \time()) < \time() - self::COLLECT_MAX_AGE_SECONDS;
+        foreach ($jobs as $index => $job) {
+            if (!$this->renewActiveLease()) {
+                return;
+            }
+            $reply = null;
+            try {
+                $jobId = $job['jobId'];
+                $reply = (new Approach_EngineCallPolicy())->invoke(
+                    static fn () => $engine->getResult($jobId),
+                    $this->diagnostics
+                );
+            } catch (\Throwable) {
+                $pollException = true;
+            }
+            $error = $reply?->getError() ?? 'job failed';
+            $retryable = $reply === null || $reply->isPending()
+                || in_array($error, ['engine_internal', 'network_error', 'api_response_invalid', 'rate_limited', 'site_purging'], true);
+            if ($retryable && !$tooOld) {
                 $pending[] = $job;
-            } elseif ($reply->isSuccessful() && $reply->getReply() !== null) {
+                continue;
+            }
+            if (!$retryable && $reply->isSuccessful()
+                && $reply->getReply() !== null && \trim($reply->getReply()) !== '') {
                 $translated[$job['key']] = $reply->getReply();
             } else {
-                $error = $reply->getError() ?? 'job failed';
                 if (in_array($error, ['config_missing', 'user_key_invalid'], true)) {
                     $this->enterFailed($locale, $version, $error, $error, $credentialState);
                     return;
                 }
+                if (!in_array($job['key'], $failedKeys, true)) {
+                    $failedKeys[] = $job['key'];
+                }
+                if ($this->diagnostics->getLastError() !== 'autotranslate_job_failed') {
+                    $this->diagnostics->recordError('autotranslate_job_failed', 'UI-string auto-translate job failed or became unavailable; English fallback retained.');
+                }
             }
-                                                                               
+                                                                              
+                                                                              
+            unset($state['jobs'][$index]);
+            $state['translated'] = $translated;
+            $state['failed_keys'] = $failedKeys;
+            $state['last_progress_at'] = \time();
+            $this->saveState($state);
         }
 
         if ($pending !== []) {
-                                                                               
-                                                                            
-                                             
+                                                                              
+                                                                                  
             $state['jobs'] = $pending;
-            \update_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE, $state, 'yes');
+            $state['translated'] = $translated;
+            $state['failed_keys'] = $failedKeys;
+            $this->saveState($state);
+            if ($pollException) {
+                $this->enterFailed($locale, $version, 'poll exception', 'autotranslate_poll_exception', $credentialState);
+            } elseif (($state['last_progress_at'] ?? $state['submitted_at'] ?? 0) < \time() - self::COLLECT_STALE_SECONDS) {
+                $this->enterFailed($locale, $version, 'translation jobs made no progress within the inactivity window');
+            }
             return;
         }
 
         if ($translated !== []) {
-            Core_Strings::storeOverlay($translated);
-            \update_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE, [
+            Core_Strings::storeOverlay($translated, $locale, $version);
+            if (\get_option(Core_StringsOptionNames::TRANSLATED) !== ['locale' => $locale, 'version' => $version, 'strings' => $translated]) {
+                throw new Routines_AutoTranslateFailure('UI-string overlay was not persisted.');
+            }
+        }
+        if ($translated !== [] || $failedKeys !== []) {
+            $this->saveState([
                 'status'  => 'complete',
                 'locale'  => $locale,
                 'version' => $version,
-            ], 'yes');
+                'partial' => $failedKeys !== [],
+                'failed_keys' => $failedKeys,
+            ]);
                                                                         
             Core_Strings::reset();
             Core_Strings::load($this->dir);
@@ -1786,14 +2224,35 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         $this->enterFailed($locale, $version, 'no translations were produced');
     }
 
-       
+    private function renewActiveLease(): bool
+    {
+        if ($this->activeLease !== null && $this->activeLease->renew()) {
+            return true;
+        }
+
+        $this->diagnostics->recordError(
+            'autotranslate_lease_lost',
+            'UI-string auto-translate stopped because its lease could not be renewed.'
+        );
+        return false;
+    }
+
+                                            
+    private function saveState(array $state): void
+    {
                                                                               
-                                                                             
-                                                                                
-                                                                       
-                                                                                
-                                                    
-       
+                                                                          
+        if (!$this->renewActiveLease()) {
+            throw new Routines_AutoTranslateFailure('UI-string worker lease lost.', Routines_AutoTranslateFailure::LEASE_LOST);
+        }
+        \update_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE, $state, 'yes');
+        if (\get_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE) !== $state) {
+            throw new Routines_AutoTranslateFailure('UI-string translation checkpoint was not persisted.');
+        }
+    }
+
+                                                                            
+                                                                            
     private function enterFailed(
         string $locale,
         string $version,
@@ -1806,17 +2265,22 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
             $errorCode,
             'UI-string auto-translate for locale ' . $locale . ': ' . $detail
         );
-        $state = [
-            'status'    => 'failed',
-            'locale'    => $locale,
-            'version'   => $version,
-            'failed_at' => \time(),
-            'failure_code' => $errorCode,
-        ];
+        $state = \get_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE);
+        $state = is_array($state) && ($state['locale'] ?? '') === $locale
+            && ($state['version'] ?? '') === $version ? $state : [];
+        if (in_array($state['status'] ?? '', ['submitting', 'pending'], true)) {
+            $state['resume_status'] = $state['status'];
+        }
+        $state['status'] = 'failed';
+        $state['locale'] = $locale;
+        $state['version'] = $version;
+        $state['failed_at'] = \time();
+        $state['failure_code'] = $errorCode;
         if ($credentialState !== null) {
             $state['credential_state'] = $credentialState;
+            $state['credential_checked_at'] = $this->credentialCheckedAt;
         }
-        \update_option(Core_StringsOptionNames::AUTOTRANSLATE_STATE, $state, 'yes');
+        $this->saveState($state);
     }
 
        
@@ -1832,6 +2296,13 @@ final class Routines_AutoTranslate implements Routine_RoutineInterface
         }
         return (array) include $file;
     }
+}
+
+
+                                                                               
+final class Routines_AutoTranslateFailure extends \RuntimeException
+{
+    public const LEASE_LOST = 1;
 }
 
 
@@ -1875,6 +2346,11 @@ final class Routines_Main implements Routine_RoutineInterface
             });
 
             add_action('admin_notices', function () {
+                $screen = \get_current_screen();
+                if (!\current_user_can('manage_options')
+                    || $screen === null || $screen->id !== 'settings_page_dolet-settings') {
+                    return;
+                }
                 echo '<div class="notice notice-success is-dismissible"><p><strong>' . \esc_html(Core_Strings::get('debug_loaded')) . '</strong></p></div>';
             });
 
@@ -1927,7 +2403,7 @@ final class Routines_Main implements Routine_RoutineInterface
         $settingsPage->setDiagnostics($diagnosticsPanel);
         $settingsPage->execute();
 
-        (new Routines_AdminLanguagesSettings($langAdmin, $debugSettings, $approachSettings, $aliases, $optionFactory))->execute();
+        (new Routines_AdminLanguagesSettings($langAdmin, $debugSettings, $approachSettings, $optionFactory))->execute();
 
         (new Routines_RuntimeDebug($debugSettings))->execute();
 
@@ -1944,6 +2420,8 @@ final class Routines_Main implements Routine_RoutineInterface
         $greenLight = false;
 
         if (
+            $approachSettings->isEnabled()
+            &&
             $ls->pairIsValid($languagePair)
             && !$languagePair->optionsAreTheSame()
             && !is_admin()
@@ -1966,11 +2444,15 @@ final class Routines_Main implements Routine_RoutineInterface
         }
 
         if ($greenLight) {
-            $tr = new Routines_Translation($languagePair, $debugSettings, $allowedTargets);
+            $registrationPolicy = new Routines_PendingRegistrationPolicy(
+                new Config_PendingRegistrationBudget(null, $diagnosticsStore)
+            );
+            $tr = new Routines_Translation($languagePair, $debugSettings, $allowedTargets, $registrationPolicy);
             $tr->execute();
         } elseif (
             $languagePair->getTargetLanguage()->getCode() === Language_Constants::ORIGINAL
             && $allowedTargets !== []
+            && $approachSettings->isEnabled()
             && !is_admin()
             && !wp_doing_ajax()
             && !wp_is_json_request()
@@ -1978,7 +2460,11 @@ final class Routines_Main implements Routine_RoutineInterface
                                                                              
                                                                                   
                                                                                
-            (new Routines_InjectPublicationMetadata($allowedTargets))->execute();
+            (new Routines_FinalResponseOwner(
+                null,
+                Language_Constants::ORIGINAL,
+                $allowedTargets
+            ))->execute();
         }
 
         (new Routines_TranslationWorkerCron(
@@ -1998,9 +2484,7 @@ final class Routines_Main implements Routine_RoutineInterface
 
 
 
-   
-                                                                 
-   
+                                                                    
 final class Routines_RequestUrl
 {
     public static function current(): string
@@ -2034,6 +2518,13 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
     private const FLOATING_STYLE_HANDLE = 'dolet-floating-language-menu';
     private const FLOATING_SCRIPT_HANDLE = 'dolet-floating-language-menu';
     private const FLOATING_ASSET_VERSION = '1.0.0.2';
+
+    private static bool $responseOutcomePending = false;
+
+                                                  
+    private static array $deferredMenus = [];
+
+    private ?string $servedLanguageOverride = null;
 
     public function __construct(
         private Config_LanguageAdminInterface $config,
@@ -2080,7 +2571,11 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
                 return;
             }
 
-            echo $this->renderFloatingMenu();
+            $menu = $this->renderFloatingMenuSafely();
+                                                                                  
+            echo self::isDeferredMenuMarkup($menu)
+                ? $menu
+                : \wp_kses($menu, self::floatingMenuAllowedHtml());
         }, 10);
 
                                                                            
@@ -2106,7 +2601,6 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
                     'title'            => Core_Strings::get('block_title'),
                     'description'      => Core_Strings::get('block_description'),
                     'showCodes'        => Core_Strings::get('menu_show_codes'),
-                    'showInterlingua'  => Core_Strings::get('menu_show_interlingua'),
                     'wrapperClass'     => Core_Strings::get('menu_wrapper_class'),
                 ]) . ';',
                 'before'
@@ -2117,13 +2611,11 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
                 'style'           => self::MENU_STYLE_HANDLE,
                 'attributes'      => [
                     'showCodes'       => ['type' => 'boolean', 'default' => true],
-                    'showInterlingua' => ['type' => 'boolean', 'default' => true],
                     'wrapperClass'    => ['type' => 'string', 'default' => 'dolet-lang-menu'],
                 ],
                 'render_callback' => function (array $attributes = []): string {
                     return $this->renderMenu(
                         (bool) ($attributes['showCodes'] ?? true),
-                        (bool) ($attributes['showInterlingua'] ?? true),
                         (string) ($attributes['wrapperClass'] ?? 'dolet-lang-menu')
                     );
                 },
@@ -2136,13 +2628,11 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
             add_shortcode('dolet_language_menu', function (array $attributes = []): string {
                 $attributes = shortcode_atts([
                     'show_codes'       => 'yes',
-                    'show_interlingua' => 'yes',
                     'class'            => 'dolet-lang-menu',
                 ], $attributes, 'dolet_language_menu');
 
                 return $this->renderMenu(
                     $this->attributeIsEnabled((string) $attributes['show_codes']),
-                    $this->attributeIsEnabled((string) $attributes['show_interlingua']),
                     (string) $attributes['class']
                 );
             });
@@ -2157,29 +2647,53 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
                                                                
     public function renderMenu(
         bool $showCodes = true,
-        bool $showInterlingua = true,
         string $wrapperClass = 'dolet-lang-menu'
     ): string
     {
-        $items = $this->buildItems();
-        if ($items === []) {
+        if (!(new Config_ApproachSettings())->isEnabled()) {
             return '';
         }
 
-        $view = new UiVisitor_LanguageMenuView();
-        $view->setWrapperClass($this->normalizeWrapperClass($wrapperClass));
-        $view->setShowCodes($showCodes);
-        $view->setShowInterlingua($showInterlingua);
-
-        foreach ($items as $item) {
-            $view->addItem($item);
+        if (self::$responseOutcomePending && $this->servedLanguageOverride === null) {
+            return $this->deferMenu(
+                fn (): string => UiVisitor_LanguageMenuWidget::sanitizeMenu(
+                    $this->renderMenu($showCodes, $wrapperClass)
+                )
+            );
         }
 
-        return $view->render();
+        try {
+            $items = $this->buildItems();
+            if ($items === []) {
+                return '';
+            }
+
+            $view = new UiVisitor_LanguageMenuView();
+            $view->setWrapperClass($this->normalizeWrapperClass($wrapperClass));
+            $view->setShowCodes($showCodes);
+
+            foreach ($items as $item) {
+                $view->addItem($item);
+            }
+
+            return $view->render();
+        } catch (\Throwable $error) {
+            (new Config_DiagnosticsStore())->recordError(
+                'manual_language_menu_render_failed',
+                $error->getMessage()
+            );
+            return '';
+        }
     }
 
     public function renderFloatingMenu(): string
     {
+        if (self::$responseOutcomePending && $this->servedLanguageOverride === null) {
+            return $this->deferMenu(
+                fn (): string => \wp_kses($this->renderFloatingMenu(), self::floatingMenuAllowedHtml())
+            );
+        }
+
         $items = $this->buildItems();
         if ($items === []) {
             return '';
@@ -2193,6 +2707,328 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
         }
 
         return $view->render();
+    }
+
+    private function renderFloatingMenuSafely(): string
+    {
+        try {
+            return $this->renderFloatingMenu();
+        } catch (\Throwable $error) {
+            (new Config_DiagnosticsStore())->recordError(
+                'floating_selector_render_failed',
+                $error->getMessage()
+            );
+            return '';
+        }
+    }
+
+    public static function beginResponseOutcome(): void
+    {
+        self::$responseOutcomePending = true;
+        self::$deferredMenus = [];
+    }
+
+    public static function isDeferredMenuMarkup(string $html): bool
+    {
+        return \str_starts_with($html, '<div class="dolet-deferred-language-menu" ')
+            && \str_contains($html, '<!--DOLET_MENU_END:');
+    }
+
+                                                     
+    public static function captureResponseOutcome(): array
+    {
+        return self::$deferredMenus;
+    }
+
+    public static function clearResponseOutcome(): void
+    {
+        self::$deferredMenus = [];
+        self::$responseOutcomePending = false;
+    }
+
+                                                           
+    public static function resolveResponseOutcome(string $html, string $servedCode, array $menus): ?string
+    {
+        $result = self::resolveResponseOutcomeResult($html, $servedCode, $menus);
+        return \is_string($result) ? $result : null;
+    }
+
+                                                           
+    public static function resolveResponseOutcomeResult(
+        string $html,
+        string $servedCode,
+        array $menus
+    ): string|Core_HtmlRejectionInterface
+    {
+        if ($menus === []) {
+            return $html;
+        }
+
+        $tokens = Dom_SourceTokenizer::tokenizeResult($html);
+        if ($tokens instanceof Core_HtmlRejectionInterface) {
+            return $tokens;
+        }
+        $bodyBounds = self::deferredBodyBounds($tokens);
+        if ($bodyBounds === null) {
+            return Core_HtmlRejection::MenuBounds;
+        }
+
+                                                   
+        $sentinels = [];
+        foreach (\array_keys($menus) as $identity) {
+            $sentinels['<!--DOLET_MENU_END:' . $identity . '-->'] = $identity;
+        }
+
+                                                        
+        $registeredOpeners = [];
+                                                          
+        $registeredSentinels = [];
+        foreach ($tokens as $index => $token) {
+            if ($token['template_depth'] !== 0 || $token['foreign_depth'] !== 0) {
+                continue;
+            }
+            $outsideBody = $token['start'] < $bodyBounds['start'] || $token['end'] > $bodyBounds['end'];
+            if ($token['type'] === 'comment') {
+                $identity = $sentinels[\substr($html, $token['start'], $token['end'] - $token['start'])]
+                    ?? null;
+                if ($identity !== null) {
+                    if ($outsideBody && $token['start'] >= $bodyBounds['end']) {
+                        return Core_HtmlRejection::MenuPlacement;
+                    }
+                    if ($outsideBody) {
+                        continue;
+                    }
+                    $registeredSentinels[$index] = $identity;
+                }
+                continue;
+            }
+            if ($token['type'] !== 'tag' || $token['closing']) {
+                continue;
+            }
+            $identity = self::deferredRegisteredIdentity($token['attributes'], $menus);
+            if ($identity !== null) {
+                if ($outsideBody) {
+                    return Core_HtmlRejection::MenuPlacement;
+                }
+                $registeredOpeners[$index] = $identity;
+            }
+        }
+
+        if ($registeredOpeners === [] && $registeredSentinels === []) {
+            return $html;
+        }
+
+                                                                              
+        $patches = [];
+                                                  
+        $usedSentinels = [];
+        foreach ($registeredOpeners as $openIndex => $identity) {
+            $opener = $tokens[$openIndex];
+            if ($opener['name'] !== 'div' || $opener['self_closing']
+                || !self::deferredOpenerQualifies($opener['attributes'], $identity)) {
+                return Core_HtmlRejection::MenuFrame;
+            }
+            $closeIndex = self::deferredMatchingDivClose($tokens, $openIndex, $bodyBounds['end']);
+            if ($closeIndex === null) {
+                return Core_HtmlRejection::MenuFrame;
+            }
+            $sentinelIndex = $closeIndex + 1;
+            if (($registeredSentinels[$sentinelIndex] ?? null) !== $identity
+                || $tokens[$sentinelIndex]['start'] !== $tokens[$closeIndex]['end']
+                || isset($usedSentinels[$sentinelIndex])) {
+                return Core_HtmlRejection::MenuFrame;
+            }
+            $rendered = $menus[$identity][$servedCode] ?? null;
+            if (!\is_string($rendered)) {
+                return Core_HtmlRejection::MenuOutcome;
+            }
+            $patches[] = [
+                'start' => $opener['start'],
+                'end' => $tokens[$sentinelIndex]['end'],
+                'replacement' => $rendered,
+            ];
+            $usedSentinels[$sentinelIndex] = true;
+        }
+        if (\count($usedSentinels) !== \count($registeredSentinels)) {
+            return Core_HtmlRejection::MenuFrame;
+        }
+
+        \usort($patches, static fn (array $left, array $right): int => $right['start'] <=> $left['start']);
+        $lastStart = \strlen($html);
+        foreach ($patches as $patch) {
+            if ($patch['end'] > $lastStart) {
+                return Core_HtmlRejection::MenuFrame;
+            }
+            $html = \substr_replace(
+                $html,
+                $patch['replacement'],
+                $patch['start'],
+                $patch['end'] - $patch['start']
+            );
+            $lastStart = $patch['start'];
+        }
+        return $html;
+    }
+
+       
+                                               
+                                            
+       
+    private static function deferredBodyBounds(array $tokens): ?array
+    {
+        $start = null;
+        $end = null;
+        foreach ($tokens as $token) {
+            if ($token['type'] !== 'tag' || $token['name'] !== 'body'
+                || $token['template_depth'] !== 0 || $token['foreign_depth'] !== 0) {
+                continue;
+            }
+            if (!$token['closing']) {
+                if ($start !== null || $end !== null) {
+                    return null;
+                }
+                $start = $token['end'];
+                continue;
+            }
+            if ($start === null || $end !== null) {
+                return null;
+            }
+            $end = $token['start'];
+        }
+        return $start !== null && $end !== null && $start <= $end
+            ? ['start' => $start, 'end' => $end]
+            : null;
+    }
+
+       
+                                                                                                           
+                                                       
+       
+    private static function deferredRegisteredIdentity(array $attributes, array $menus): ?string
+    {
+        foreach ($attributes as $attribute) {
+            if ($attribute['name'] === 'data-dolet-language-menu'
+                && isset($menus[$attribute['value']])) {
+                return $attribute['value'];
+            }
+        }
+        return null;
+    }
+
+                                                                                                               
+    private static function deferredOpenerQualifies(array $attributes, string $identity): bool
+    {
+        $identityCount = 0;
+        $classCount = 0;
+        $hasWrapperClass = false;
+        foreach ($attributes as $attribute) {
+            if ($attribute['name'] === 'data-dolet-language-menu') {
+                $identityCount++;
+                if ($attribute['value'] !== $identity) {
+                    return false;
+                }
+            }
+            if ($attribute['name'] === 'class') {
+                $classCount++;
+                $hasWrapperClass = Dom_SourceTokenizer::hasHtmlSpaceSeparatedToken(
+                    $attribute['value'],
+                    'dolet-deferred-language-menu'
+                );
+            }
+        }
+        return $identityCount === 1 && $classCount === 1 && $hasWrapperClass;
+    }
+
+                                                   
+    private static function deferredMatchingDivClose(array $tokens, int $openIndex, int $bodyEnd): ?int
+    {
+        $depth = 0;
+        for ($index = $openIndex, $count = \count($tokens); $index < $count; $index++) {
+            $token = $tokens[$index];
+            if ($token['start'] >= $bodyEnd) {
+                break;
+            }
+            if ($token['type'] !== 'tag' || $token['name'] !== 'div'
+                || $token['template_depth'] !== 0 || $token['foreign_depth'] !== 0) {
+                continue;
+            }
+            $depth += $token['closing'] ? -1 : 1;
+            if ($depth === 0) {
+                return $index;
+            }
+        }
+        return null;
+    }
+
+       
+                                                                          
+                                                                          
+      
+                                         
+       
+    private function deferMenu(callable $renderer): string
+    {
+        $requested = $this->settings->getRequestedLanguage()->getCode();
+        $renderedOutcomes = [];
+        foreach (\array_values(\array_unique([Language_Constants::ORIGINAL, $requested])) as $servedCode) {
+            $this->servedLanguageOverride = $servedCode;
+            try {
+                $renderedOutcomes[$servedCode] = $renderer();
+            } catch (\Throwable $error) {
+                (new Config_DiagnosticsStore())->recordError(
+                    'deferred_language_menu_render_failed',
+                    $error->getMessage()
+                );
+                $renderedOutcomes[$servedCode] = '';
+            } finally {
+                $this->servedLanguageOverride = null;
+            }
+        }
+
+        try {
+            $identity = \bin2hex(\random_bytes(16));
+        } catch (\Throwable) {
+            $identity = \hash('sha256', \uniqid('', true) . ':' . \microtime(true));
+        }
+        $escapedIdentity = \esc_attr($identity);
+        $marker = '<div class="dolet-deferred-language-menu" data-no-translate style="display:contents" '
+            . 'data-dolet-language-menu="' . $escapedIdentity . '">'
+            . ($renderedOutcomes[Language_Constants::ORIGINAL] ?? '')
+            . '</div><!--DOLET_MENU_END:' . $escapedIdentity . '-->';
+        self::$deferredMenus[$identity] = $renderedOutcomes;
+        return $marker;
+    }
+
+                                                   
+    private static function floatingMenuAllowedHtml(): array
+    {
+        return [
+            'div' => ['class' => true, 'data-no-translate' => true, 'translate' => true],
+            'details' => ['class' => true, 'data-dolet-opening' => true],
+            'summary' => ['aria-label' => true, 'class' => true],
+            'span' => [
+                'aria-current' => true,
+                'aria-hidden' => true,
+                'class' => true,
+                'data-no-translate' => true,
+                'data-dolet-language-menu' => true,
+            ],
+            'svg' => [
+                'fill' => true,
+                'focusable' => true,
+                'height' => true,
+                'stroke' => true,
+                'viewbox' => true,
+                'width' => true,
+            ],
+            'circle' => ['cx' => true, 'cy' => true, 'r' => true],
+            'path' => ['d' => true],
+            'nav' => ['aria-label' => true, 'class' => true],
+            'ul' => ['class' => true],
+            'li' => ['class' => true],
+            'a' => ['class' => true, 'data-dolet-preserve-l' => true, 'href' => true],
+            'code' => ['class' => true],
+        ];
     }
 
                                                                                  
@@ -2235,7 +3071,6 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
                                                                              
     public static function renderMenuStatic(
         bool $showCodes = true,
-        bool $showInterlingua = true,
         string $wrapperClass = 'dolet-lang-menu'
     ): string
     {
@@ -2247,7 +3082,7 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
         $ls      = new Language_Settings($cfg, $aliases, $factory);
         $routine = new self($cfg, $ls);
 
-        return $routine->renderMenu($showCodes, $showInterlingua, $wrapperClass);
+        return $routine->renderMenu($showCodes, $wrapperClass);
     }
 
 
@@ -2261,13 +3096,14 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
             return esc_url(remove_query_arg($param, $url));
         }
 
-        return esc_url(add_query_arg([$param => $code], $url));
+        return \esc_url(\add_query_arg([$param => \rawurlencode($code)], $url));
     }
 
                                                             
     private function buildItems(): array
     {
-        $requested = $this->settings->getRequestedLanguage()->getCode();
+        $requested = $this->servedLanguageOverride
+            ?? \apply_filters('sole_translation_served_language', $this->settings->getRequestedLanguage()->getCode());
         $targets = $this->config->getTargetCodes();
         if ($targets === []) {
             return [];
@@ -2303,7 +3139,8 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
             return false;
         }
 
-        return (bool) get_option(Config_TranslationOptionNames::FLOATING_SELECTOR_ENABLED, true)
+        return (new Config_ApproachSettings())->isEnabled()
+            && Config_OptionValue::boolean(\get_option(Config_TranslationOptionNames::FLOATING_SELECTOR_ENABLED, true))
             && $this->config->getTargetCodes() !== [];
     }
 
@@ -2325,7 +3162,7 @@ final class Routines_PublicLanguageMenu implements Routine_RoutineInterface
 
     private function normalizeWrapperClass(string $class): string
     {
-        $classes = preg_split('/\s+/', trim($class)) ?: [];
+        $classes = Dom_SourceTokenizer::splitHtmlSpace($class);
         $classes = array_values(array_filter(array_map(
             static fn (string $item): string => sanitize_html_class($item),
             $classes
@@ -2375,6 +3212,15 @@ final class Routines_RuntimeDebug implements Routine_RoutineInterface
 }
 
 
+final class Routines_SettingsValue implements Routines_SettingsValueInterface
+{
+    public static function checkbox(mixed $value): bool
+    {
+        return Config_OptionValue::boolean($value);
+    }
+}
+
+
    
                                                
    
@@ -2386,12 +3232,12 @@ final class Routines_ShortcodesParsing implements Routine_RoutineInterface
 
     public function execute(): void
     {
-        add_shortcode('notranslate', function ($atts = [], $content = '', $tag = '') {
+        $callback = static function (mixed $atts = [], ?string $content = '', string $tag = ''): string {
                                                                                                   
-                                                                                         
-                                                                       
-            return '<span class="notranslate" translate="no" data-no-translate="1" style="display: contents">' . do_shortcode($content) . '</span>';
-        });
+            return '<span class="notranslate" translate="no" data-no-translate="1" style="display: contents">' . \wp_kses_post(\do_shortcode($content ?? '')) . '</span>';
+        };
+        \add_shortcode('sole_translation_notranslate', $callback);
+        \add_shortcode('notranslate', $callback);
     }
 }
 
@@ -2399,177 +3245,713 @@ final class Routines_ShortcodesParsing implements Routine_RoutineInterface
    
                                                                     
    
-final class Routines_TranslateFinalHtml implements Routine_RoutineInterface
+final class Routines_FinalResponseOwner implements Routine_RoutineInterface, Routines_TemplateResponseInterface
 {
+    private const MAX_RESPONSE_BYTES = 4194304;
+    private const MIN_HOST_RESERVE_BYTES = 8388608;
+
+    private string $servedLanguage = Language_Constants::ORIGINAL;
+    private bool $responseCommitted = false;
+    private ?string $selectedTemplate = null;
+    private string $bufferHandler = self::class . '::identityBuffer';
     private bool $bufferStarted = false;
+    private bool $finalized = false;
+    private bool $diagnosticRecorded = false;
+    private ?int $bufferLevel = null;
+    private ?string $fallbackSource = null;
+                            
+    private array $cacheHeadersBeforeTemplate = [];
+                                 
+    private ?array $provisionalCacheHeaders = null;
+                                                             
+    private array $lowerBuffers = [];
 
        
                                       
        
     public function __construct(
-        private Translation_TranslatorInterface $translator,
+        private ?Translation_TranslatorInterface $translator,
         private string $currentLangCode = '',
         private array $allTargetCodes = [],
     ) {}
 
     public function execute(): void
     {
-                                                             
-        add_action('template_redirect', function (): void {
-            if ($this->bufferStarted) {
+        \add_filter('sole_translation_served_language', fn(mixed $requested): string => $this->servedLanguage);
+        \add_action('template_redirect', function (): void {
+            if ($this->translator === null || !$this->mayCaptureTemplate() || \headers_sent()) {
                 return;
             }
-
-                                                                                            
-            if (is_admin() || is_feed() || is_robots() || wp_doing_ajax() || wp_is_json_request()) {
-                return;
-            }
-
-            $this->bufferStarted = true;
-
-                                                       
-            ob_start(function (string $html) {
-                try {
-                                                                      
-                    if ($html === '' || (stripos($html, '<html') === false && stripos($html, '<!DOCTYPE') === false)) {
-                                                                                              
-                                                                                        
-                                        
-                    }
-
-                                                                                      
-                    $translated = $this->translator->translateFinalHtml($html);
-
+            $this->cacheHeadersBeforeTemplate = self::templateCacheHeaders();
                                                                                   
-                                                                                
-                                                                           
-                    $translated = Dom_DocumentLanguage::apply(
-                        $translated,
-                        $this->currentLangCode
-                    );
-
-                                                                  
-                    if ($this->currentLangCode !== '' && $this->allTargetCodes !== []) {
-
-                        $currentUrl = Routines_RequestUrl::current();
-
-                        $translated = Dom_HreflangInjector::inject(
-                            $translated,
-                            $this->currentLangCode,
-                            $this->allTargetCodes,
-                            $currentUrl
-                        );
-                    }
-
-                    return $translated;
-                } catch (\Throwable $e) {
-                                                                       
-                    if (defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
-                        error_log('[Dolet WP] TranslateFinalHtml error: ' . $e->getMessage());
-                    }
-                    return $html;                     
+            $headers = self::defaultNoCacheHeaders();
+            $headers['Cache-Control'] .= ', sole-translation-pending';
+            foreach ($headers as $name => $value) {
+                if ($value !== false) {
+                    \header($name . ': ' . $value);
                 }
-            });
-        }, 9999);
+            }
+            $this->provisionalCacheHeaders = self::templateCacheHeaders();
+        }, 0);
+        if (\function_exists('wp_start_template_enhancement_output_buffer')) {
+                                                                                                  
+            \add_action('template_redirect', function (): void {
+                if ($this->mayCaptureTemplate()) {
+                    \add_filter('wp_template_enhancement_output_buffer', [self::class, 'identityBuffer']);
+                }
+            }, 0);
+            \add_action('wp_before_include_template', function (): void {
+                if (!$this->bufferStarted && $this->mayCaptureTemplate()) {
+                    try {
+                        $vetoed = \function_exists('wp_should_output_buffer_template_for_enhancement')
+                            && !\wp_should_output_buffer_template_for_enhancement();
+                    } catch (\Throwable) {
+                        $vetoed = false;
+                    }
+                    if ($vetoed) {
+                        $this->preventTargetCaching(self::defaultNoCacheHeaders());
+                    } else {
+                        $this->reportTemplateBufferFailure();
+                    }
+                }
+            }, PHP_INT_MAX);
+            \add_action('wp_template_enhancement_output_buffer_started', function (): void {
+                if ($this->bufferStarted || !$this->mayCaptureTemplate()) {
+                    return;
+                }
+                foreach (\ob_get_status(true) as $status) {
+                    if (($status['name'] ?? '') === 'wp_finalize_template_enhancement_output_buffer') {
+                        $this->bufferLevel = (int)$status['level'] + 1;
+                    }
+                }
+                if ($this->bufferLevel === null) {
+                    return;
+                }
+                $this->bufferHandler = 'wp_finalize_template_enhancement_output_buffer';
+                $this->lowerBuffers = self::lowerBufferSnapshot();
+                $this->bufferStarted = true;
+                Routines_PublicLanguageMenu::beginResponseOutcome();
+                \add_action('shutdown', function (): void { $this->finalizeResponse(); }, 0);
+            }, PHP_INT_MAX);
+            return;
+        }
+        \add_filter('template_include', function (mixed $template): mixed {
+            if ($this->bufferStarted || !\is_string($template) || \realpath($template) === __DIR__ . '/template-response.php'
+                || !\is_file($template)
+                || !\is_readable($template) || !$this->mayCaptureTemplate()
+                || !\is_file(__DIR__ . '/template-response.php') || !\is_readable(__DIR__ . '/template-response.php')) {
+                return $template;
+            }
+            $this->selectedTemplate = $template;
+            \add_filter('sole_translation_template_response_owner', fn(mixed $owner): Routines_TemplateResponseInterface => $this);
+            return __DIR__ . '/template-response.php';
+        }, PHP_INT_MAX);
     }
-}
 
-
-   
-                                                                         
-   
-final class Routines_InjectPublicationMetadata implements Routine_RoutineInterface
-{
-    private bool $bufferStarted = false;
-
-                                          
-    public function __construct(private array $allTargetCodes) {}
-
-    public function execute(): void
+    private function mayCaptureTemplate(): bool
     {
-        add_action('template_redirect', function (): void {
-            if (
-                $this->bufferStarted
-                || is_admin()
-                || is_feed()
-                || is_robots()
-                || wp_doing_ajax()
-                || wp_is_json_request()
-            ) {
+        $rawMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        return \is_string($rawMethod) && \strtoupper($rawMethod) === 'GET'
+            && !\is_admin() && !\is_feed() && !\is_robots()
+            && !\wp_doing_ajax() && !\wp_is_json_request();
+    }
+
+    public function getSelectedTemplate(): string
+    {
+        return $this->selectedTemplate ?? '';
+    }
+
+    public function hasStartedTemplateResponse(): bool
+    {
+        return $this->bufferStarted;
+    }
+
+    public function prepareTemplateResponse(): void
+    {
+        $this->lowerBuffers = self::lowerBufferSnapshot();
+    }
+
+    public function startTemplateResponse(): void
+    {
+        $this->bufferStarted = true;
+        $this->bufferLevel = \ob_get_level();
+        Routines_PublicLanguageMenu::beginResponseOutcome();
+    }
+
+                               
+    private static function templateCacheHeaders(): array
+    {
+        return \array_values(\array_filter(\headers_list(), static function (string $header): bool {
+            $name = \strtolower(\explode(':', $header, 2)[0]);
+            return $name === 'cache-control' || $name === 'expires';
+        }));
+    }
+
+    private function restoreCaptureWindowHeaders(): void
+    {
+        if ($this->provisionalCacheHeaders === null) {
+            return;
+        }
+        $unchanged = self::templateCacheHeaders() === $this->provisionalCacheHeaders;
+        $this->provisionalCacheHeaders = null;
+        if (!$unchanged || \headers_sent() || (\defined('DONOTCACHEPAGE') && DONOTCACHEPAGE)) {
+            return;
+        }
+        \header_remove('Cache-Control');
+        \header_remove('Expires');
+        foreach ($this->cacheHeadersBeforeTemplate as $header) {
+            \header($header, false);
+        }
+    }
+
+    public function reportTemplateBufferFailure(): void
+    {
+        $this->preventTargetCaching(self::defaultNoCacheHeaders());
+        $this->recordDiagnosticOnce('final_html_buffer_start_failed', 'Dolet could not open its response buffer.');
+    }
+
+    public function clearTemplateResponse(): void
+    {
+        Routines_PublicLanguageMenu::clearResponseOutcome();
+    }
+
+    public function ownsTemplateBuffer(): bool
+    {
+        if ($this->bufferLevel === null || \ob_get_level() !== $this->bufferLevel) {
+            return false;
+        }
+        $status = \ob_get_status();
+        return ($status['name'] ?? '') === $this->bufferHandler;
+    }
+
+    public static function identityBuffer(string $buffer): string
+    {
+        return $buffer;
+    }
+
+    public function finalizeResponse(): void
+    {
+        if (!$this->bufferStarted || $this->finalized) {
+            return;
+        }
+        $this->finalized = true;
+
+        try {
+            $this->finalizeOwnedResponse();
+        } finally {
+            Routines_PublicLanguageMenu::clearResponseOutcome();
+        }
+    }
+
+    private function finalizeOwnedResponse(): void
+    {
+        if (\headers_sent()) {
+            $this->preventTargetCaching(self::defaultNoCacheHeaders());
+            $this->recordDiagnosticOnce('final_html_source_already_sent', 'Output began before Dolet finalization.');
+            return;
+        }
+        if ($this->bufferLevel === null || \ob_get_level() > $this->bufferLevel) {
+            $this->preventTargetCaching(self::defaultNoCacheHeaders());
+            $this->recordDiagnosticOnce('final_html_foreign_buffer', 'Another output buffer remained above Dolet.');
+            return;
+        }
+        if ($this->lowerBufferWasWritten()) {
+            $this->preventTargetCaching(self::defaultNoCacheHeaders());
+            $this->recordDiagnosticOnce('final_html_source_already_flushed', 'Captured source was flushed before Dolet finalization.');
+            return;
+        }
+
+        $source = $this->capturedSource();
+        if ($source === null) {
+            $this->preventPublicationCaching(self::defaultNoCacheHeaders());
+            $this->recordDiagnosticOnce('final_html_buffer_level_lost', 'Dolet could not find its response buffer.');
+            return;
+        }
+
+        if (!$this->responseIsHtml()) {
+            $this->preventTargetCaching(self::defaultNoCacheHeaders());
+            $this->finishResponse($source, $source);
+            return;
+        }
+
+        $menus = Routines_PublicLanguageMenu::captureResponseOutcome();
+        if (!$this->responseFitsTransformBudget($source)) {
+            if (\strlen($source) <= self::MAX_RESPONSE_BYTES) {
+                $this->preventPublicationCaching(self::defaultNoCacheHeaders());
+            } else {
+                $this->preventTargetCaching(self::defaultNoCacheHeaders());
+            }
+            $reason = \strlen($source) > self::MAX_RESPONSE_BYTES
+                ? Core_HtmlRejection::Bytes
+                : Core_HtmlRejection::Memory;
+            $this->finishResponse($source, $source, $reason);
+            return;
+        }
+
+        $fallback = $source;
+        $step = Core_HtmlRejection::PreflightMenu;
+        try {
+            $resolved = Routines_PublicLanguageMenu::resolveResponseOutcomeResult(
+                $source,
+                Language_Constants::ORIGINAL,
+                $menus
+            );
+            if ($resolved instanceof Core_HtmlRejectionInterface) {
+                $this->preventPublicationCaching(self::defaultNoCacheHeaders());
+                $this->finishResponse($source, $source, $resolved);
                 return;
             }
+            $fallback = $resolved;
+            $this->fallbackSource = $fallback;
+            $step = Core_HtmlRejection::PreflightEnvironment;
+            $noCacheHeaders = \function_exists('wp_get_nocache_headers')
+                ? \wp_get_nocache_headers()
+                : self::defaultNoCacheHeaders();
+            $step = Core_HtmlRejection::PreflightDirection;
+            $documentDirection = Dom_DocumentLanguage::directionFor($this->currentLangCode);
+            $step = Core_HtmlRejection::PreflightRequest;
+            $requestUrl = Routines_RequestUrl::current();
+        } catch (\Throwable) {
+            $this->preventPublicationCaching(self::defaultNoCacheHeaders());
+            $this->finishResponse($fallback, $source, $step);
+            return;
+        }
 
-            $this->bufferStarted = true;
-            ob_start(function (string $html): string {
-                if ($html === '' || (stripos($html, '<html') === false && stripos($html, '<!DOCTYPE') === false)) {
-                    return $html;
-                }
-
-                try {
-
-                    return Dom_HreflangInjector::inject(
-                        $html,
-                        Language_Constants::ORIGINAL,
-                        $this->allTargetCodes,
-                        Routines_RequestUrl::current()
-                    );
-                } catch (\Throwable $e) {
-                    if (defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
-                        error_log('[Dolet WP] PublicationMetadata error: ' . $e->getMessage());
-                    }
-                    return $html;
-                }
-            });
-        }, 9999);
+        $step = Core_HtmlRejection::RenderMetadata;
+        try {
+            if ($this->translator === null) {
+                $candidate = Dom_HreflangInjector::inject(
+                    $source,
+                    Language_Constants::ORIGINAL,
+                    $this->allTargetCodes,
+                    $requestUrl
+                );
+                $step = Core_HtmlRejection::RenderMenu;
+                $candidate = Routines_PublicLanguageMenu::resolveResponseOutcomeResult(
+                    $candidate,
+                    Language_Constants::ORIGINAL,
+                    $menus
+                );
+                $step = Core_HtmlRejection::RenderValidation;
+                $this->commitCandidateResponse($source, $fallback, $candidate, $noCacheHeaders);
+                return;
+            }
+            $step = Core_HtmlRejection::RenderTranslation;
+            $candidate = $this->translator->translateFinalHtml($source, true);
+            if ($this->translator->didLoseStructureLastPass()) {
+                $this->preventResponseCaching($noCacheHeaders);
+                $this->finishResponse($fallback, $source, $this->translator->getRejectionLastPass());
+                return;
+            }
+            if (!$this->translator->isCompleteLastPass()) {
+                $this->preventResponseCaching($noCacheHeaders);
+            }
+            if ($this->translator->didTranslateLastPass()) {
+                $step = Core_HtmlRejection::RenderLanguage;
+                $candidate = Dom_DocumentLanguage::applyResolved(
+                    $candidate,
+                    $this->currentLangCode,
+                    $documentDirection
+                );
+            }
+            if ($this->currentLangCode !== '' && $this->allTargetCodes !== []) {
+                $step = Core_HtmlRejection::RenderMetadata;
+                $candidate = Dom_HreflangInjector::inject(
+                    $candidate,
+                    $this->currentLangCode,
+                    $this->allTargetCodes,
+                    $requestUrl
+                );
+            }
+            $step = Core_HtmlRejection::RenderMenu;
+            $servedCode = $this->translator->didTranslateLastPass() ? $this->currentLangCode : Language_Constants::ORIGINAL;
+            $candidate = Routines_PublicLanguageMenu::resolveResponseOutcomeResult(
+                $candidate,
+                $servedCode,
+                $menus
+            );
+            $step = Core_HtmlRejection::RenderValidation;
+            $this->commitCandidateResponse($source, $fallback, $candidate, $noCacheHeaders, $servedCode);
+        } catch (\Throwable) {
+            $this->preventPublicationCaching($noCacheHeaders);
+            $this->finishResponse($fallback, $source, $step);
+            if (\defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
+                \error_log('[Dolet WP] ' . $step->code());
+            }
+        }
     }
-}
 
-
-   
-                                                                                
-   
-final class Routines_TranslatePrincipalContent implements Routine_RoutineInterface
-{
-    public function __construct(
-        private Translation_TranslatorInterface $translator,
-    ) {}
-
-    public function execute(): void
+    private function finishResponse(
+        string $response,
+        string $source,
+        ?Core_HtmlRejectionInterface $reason = null,
+        bool $candidate = false
+    ): void
     {
-                 
-        add_filter('the_title', function (string $title, int $post_id): string {
-            if (is_admin() || !is_main_query()) {
-                return $title;
-            }
-            return $this->translator->naiveTranslate($title);
-        }, 99, 2);
+        try {
+            $this->commitResponse($response, $source);
+        } catch (\Throwable) {
+            $this->recoverSource($source);
+        }
+        if ($reason !== null) {
+            $this->recordDiagnosticOnce($reason->code($candidate), $reason->context());
+        }
+    }
 
-                       
-        add_filter('the_content', function (string $content): string {
-            if (is_admin() || is_feed() || !is_main_query() || !in_the_loop() || !is_singular()) {
-                return $content;
+                                                     
+    private function commitCandidateResponse(
+        string $source,
+        string $fallback,
+        string|Core_HtmlRejectionInterface $candidate,
+        array $headers,
+        string $servedCode = Language_Constants::ORIGINAL
+    ): void
+    {
+        $failure = $candidate instanceof Core_HtmlRejectionInterface
+            ? ['reason' => $candidate, 'candidate' => true]
+            : $this->candidateRejection($source, $candidate);
+        if ($failure === null && \is_string($candidate)) {
+            $this->finishResponse($candidate, $source);
+            if ($this->responseCommitted) {
+                if ($this->translator === null || $this->translator->isCompleteLastPass()) {
+                    $this->restoreCaptureWindowHeaders();
+                }
+                $this->servedLanguage = $servedCode;
             }
+            return;
+        }
+        if ($this->translator === null) {
+            $this->preventPublicationCaching($headers);
+        } else {
+            $this->preventResponseCaching($headers);
+        }
+        if ($failure !== null) {
+            $this->finishResponse($fallback, $source, $failure['reason'], $failure['candidate']);
+        }
+    }
 
-            $translated = $this->translator->translateHtml($content);
-            return $translated;
-        }, 99);
+                                             
+    private static function defaultNoCacheHeaders(): array
+    {
+        return [
+            'Expires' => 'Wed, 11 Jan 1984 05:00:00 GMT',
+            'Cache-Control' => 'no-cache, must-revalidate, max-age=0, no-store, private',
+        ];
+    }
+
+                                                     
+    private function preventResponseCaching(array $headers): void
+    {
+        if (!\defined('DONOTCACHEPAGE')) {
+            \define('DONOTCACHEPAGE', true);
+        }
+        if (!\headers_sent()) {
+            \header_remove('Last-Modified');
+            foreach ($headers as $name => $value) {
+                if ($value === false) {
+                    \header_remove($name);
+                    continue;
+                }
+                \header($name . ': ' . $value);
+            }
+        }
+    }
+
+                                                     
+    private function preventTargetCaching(array $headers): void
+    {
+        if ($this->translator !== null) {
+            $this->preventResponseCaching($headers);
+        }
+    }
+
+                                                     
+    private function preventPublicationCaching(array $headers): void
+    {
+        if ($this->translator !== null || $this->allTargetCodes !== []) {
+            $this->preventResponseCaching($headers);
+        }
+    }
+
+    private function responseIsHtml(): bool
+    {
+        $first = null;
+        foreach (\headers_list() as $header) {
+            if (\stripos($header, 'Content-Type:') !== 0) {
+                continue;
+            }
+            $type = \strtolower(\trim(\explode(';', \substr($header, 13), 2)[0]));
+            if ($first === null) {
+                $first = $type;
+                continue;
+            }
+            if ($type !== $first) {
+                return false;
+            }
+        }
+        return $first === null || \in_array($first, ['text/html', 'application/xhtml+xml'], true);
+    }
+
+                                                                
+    private static function lowerBufferSnapshot(): array
+    {
+        $snapshot = [];
+        foreach (\ob_get_status(true) as $status) {
+            $level = (int)($status['level'] ?? -1);
+            $snapshot[$level] = [
+                'name' => (string)($status['name'] ?? ''),
+                'buffer_used' => (int)($status['buffer_used'] ?? 0),
+            ];
+        }
+        return $snapshot;
+    }
+
+    private function lowerBufferWasWritten(): bool
+    {
+        $targetLevel = $this->bufferLevel === null ? -1 : $this->bufferLevel - 1;
+        foreach (\ob_get_status(true) as $status) {
+            $level = (int)($status['level'] ?? -1);
+            if ($level >= $targetLevel || !isset($this->lowerBuffers[$level])) {
+                continue;
+            }
+            $before = $this->lowerBuffers[$level];
+            if ($before['name'] !== (string)($status['name'] ?? '')
+                || (int)($status['buffer_used'] ?? 0) > $before['buffer_used']) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function capturedSource(): ?string
+    {
+        if ($this->bufferLevel === null || \ob_get_level() < $this->bufferLevel) {
+            return null;
+        }
+        if (\ob_get_level() !== $this->bufferLevel) {
+            return null;
+        }
+        $statuses = \ob_get_status(true);
+        $status = $statuses[$this->bufferLevel - 1] ?? null;
+        if (!\is_array($status)
+            || (string)($status['name'] ?? '') !== $this->bufferHandler) {
+            return null;
+        }
+        $source = \ob_get_contents();
+        if (!\is_string($source)) {
+            return null;
+        }
+        return $source;
+    }
+
+    private function commitResponse(string $response, string $source): bool
+    {
+        $this->responseCommitted = false;
+        if ($this->bufferLevel === null || \ob_get_level() !== $this->bufferLevel) {
+            return $this->recoverSource($source);
+        }
+        $statuses = \ob_get_status(true);
+        $status = $statuses[$this->bufferLevel - 1] ?? null;
+        if (!\is_array($status)
+            || (string)($status['name'] ?? '') !== $this->bufferHandler
+            || \ob_get_contents() !== $source
+            || $this->lowerBufferWasWritten()
+            || \headers_sent()) {
+            return $this->recoverSource($source);
+        }
+        if ($response !== $source) {
+            \header_remove('Content-Length');
+        }
+        if (!\ob_clean()) {
+            return $this->recoverSource($source);
+        }
+        echo $response;
+        $this->responseCommitted = true;
+        return true;
+    }
+
+    private function recoverSource(string $source): bool
+    {
+        $this->responseCommitted = false;
+        $this->preventPublicationCaching(self::defaultNoCacheHeaders());
+        $this->recordDiagnosticOnce(
+            'final_html_commit_failed',
+            'Dolet retained the source because the response buffer changed before commit.'
+        );
+        if ($this->lowerBufferWasWritten() || \headers_sent()) {
+            return false;
+        }
+        if ($this->bufferLevel !== null && \ob_get_level() > $this->bufferLevel) {
+            return false;
+        }
+        if ($this->bufferLevel !== null && \ob_get_level() === $this->bufferLevel) {
+            $statuses = \ob_get_status(true);
+            $status = $statuses[$this->bufferLevel - 1] ?? null;
+            if (!\is_array($status)
+                || (string)($status['name'] ?? '') !== $this->bufferHandler
+                || !\ob_clean()) {
+                return false;
+            }
+        }
+        $fallback = $this->fallbackSource ?? $source;
+        if ($fallback !== $source) {
+            \header_remove('Content-Length');
+        }
+        echo $fallback;
+        return true;
+    }
+
+                                                                                
+    private function candidateRejection(string $source, string $candidate): ?array
+    {
+        if ($source !== '' && Dom_SourceTokenizer::isHtmlSpaceOnly($candidate)) {
+            return ['reason' => Core_HtmlRejection::Empty, 'candidate' => true];
+        }
+        $sourceTokens = Dom_SourceTokenizer::tokenizeResult($source);
+        if ($sourceTokens instanceof Core_HtmlRejectionInterface) {
+            return ['reason' => $sourceTokens, 'candidate' => false];
+        }
+        $candidateTokens = Dom_SourceTokenizer::tokenizeResult($candidate);
+        if ($candidateTokens instanceof Core_HtmlRejectionInterface) {
+            return ['reason' => $candidateTokens, 'candidate' => true];
+        }
+        $sourceBounds = Dom_SourceTokenizer::documentBoundsResult($source, $sourceTokens);
+        if ($sourceBounds instanceof Core_HtmlRejectionInterface) {
+            return ['reason' => $sourceBounds, 'candidate' => false];
+        }
+        $candidateBounds = Dom_SourceTokenizer::documentBoundsResult($candidate, $candidateTokens);
+        if ($candidateBounds instanceof Core_HtmlRejectionInterface) {
+            return ['reason' => $candidateBounds, 'candidate' => true];
+        }
+        if ($this->hasMeaningfulContent($source, $sourceTokens, $sourceBounds)
+            && !$this->hasMeaningfulContent($candidate, $candidateTokens, $candidateBounds)) {
+            return ['reason' => Core_HtmlRejection::Content, 'candidate' => true];
+        }
+        if ($sourceBounds['body_open_end'] !== null
+            && ($candidateBounds['full'] !== $sourceBounds['full'] || $candidateBounds['body_open_end'] === null
+                || $candidateBounds['body_close_start'] === null)) {
+            return ['reason' => Core_HtmlRejection::Shape, 'candidate' => true];
+        }
+        return null;
+    }
+
+       
+                                               
+                                                 
+       
+    private function hasMeaningfulContent(string $html, array $tokens, array $bounds): bool
+    {
+        $start = $bounds['body_open_end'] ?? 0;
+        $end = $bounds['body_close_start'] ?? \strlen($html);
+        foreach ($tokens as $token) {
+            if ($token['start'] < $start || $token['end'] > $end) {
+                continue;
+            }
+            if (($token['type'] === 'text' || $token['type'] === 'raw')
+                && !Dom_SourceTokenizer::isHtmlSpaceOnly(
+                    \substr($html, $token['start'], $token['end'] - $token['start'])
+                )) {
+                return true;
+            }
+            if ($token['type'] === 'tag' && !$token['closing']) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function recordDiagnosticOnce(string $code, string $context): void
+    {
+        if ($this->diagnosticRecorded) {
+            return;
+        }
+        $level = \ob_get_level();
+        try {
+            if (!\ob_start()) {
+                return;
+            }
+            $this->diagnosticRecorded = true;
+            try {
+                (new Config_DiagnosticsStore())->recordError($code, $context);
+            } finally {
+                                                                                                      
+                while (\ob_get_level() > $level
+                    && (((int) (\ob_get_status()['flags'] ?? 0)) & PHP_OUTPUT_HANDLER_REMOVABLE) !== 0) {
+                    if (!\ob_end_clean()) {
+                        break;
+                    }
+                }
+            }
+        } catch (\Throwable) {
+                                                                        
+        }
+    }
+
+    private function responseFitsTransformBudget(
+        string $html,
+        ?int $memoryLimitBytes = null,
+        ?int $memoryUsageBytes = null
+    ): bool {
+        $length = \strlen($html);
+        if ($length > self::MAX_RESPONSE_BYTES) {
+            return false;
+        }
+
+        $limit = $memoryLimitBytes ?? self::runtimeMemoryLimitBytes();
+        if ($limit < 0) {
+            return true;
+        }
+        $usage = $memoryUsageBytes ?? \memory_get_usage(true);
+        $reserve = \max(self::MIN_HOST_RESERVE_BYTES, \intdiv($limit, 4));
+        return $limit - $usage - $length >= $reserve;
+    }
+
+    private static function runtimeMemoryLimitBytes(): int
+    {
+        $raw = \strtolower(\trim((string)\ini_get('memory_limit')));
+        if ($raw === '' || $raw === '-1') {
+            return -1;
+        }
+        $value = (int)$raw;
+        return match (\substr($raw, -1)) {
+            'g' => $value * 1024 * 1024 * 1024,
+            'm' => $value * 1024 * 1024,
+            'k' => $value * 1024,
+            default => $value,
+        };
     }
 }
 
 
-   
-                                                                                 
-  
-                                          
-                                     
-                                                                      
-                                                                    
-                                                            
-  
-             
-                                                                             
-                                                                
-   
+                                                                        
+final class Routines_PendingRegistrationPolicy implements Translation_PendingRegistrationPolicyInterface
+{
+    private ?bool $requestMayRegister = null;
+
+    public function __construct(private Translation_PendingRegistrationPolicyInterface $budget) {}
+
+    public function claim(): bool
+    {
+        if ($this->requestMayRegister === null) {
+            $this->requestMayRegister = !$this->isCacheOnlyRequest();
+        }
+        return $this->requestMayRegister && $this->budget->claim();
+    }
+
+    private function isCacheOnlyRequest(): bool
+    {
+        if (\is_user_logged_in() || \is_search() || \is_404()) {
+            return true;
+        }
+        foreach (\array_keys($_GET) as $key) {
+            if (!is_string($key) || $key !== 'l') {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
 final class Routines_Translation implements Routine_RoutineInterface
 {
        
@@ -2579,26 +3961,34 @@ final class Routines_Translation implements Routine_RoutineInterface
         private Language_PairInterface $languagePair,
         private Config_DebugSettingsInterface $debugSettings,
         private array $allTargetCodes = [],
+        private ?Translation_PendingRegistrationPolicyInterface $registrationPolicy = null,
+        private ?Data_TranslationMemoryRepositoryInterface $repository = null,
     ) {}
 
     public function execute(): void
     {
                                                                   
-        $repo = new Data_TranslationMemoryRepository();
+        $repo = $this->repository ?? new Data_TranslationMemoryRepository();
 
-                                                                                      
                                                                               
+                                                                          
         $repoReady = true;
+        $readinessFailure = 'Translation-memory storage is not ready.';
         try {
-            $repo->ensureReady();
+            $repoReady = $repo->isReady();
         } catch (\Throwable $e) {
             $repoReady = false;
+            $readinessFailure = $e->getMessage();
             if (defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
-                error_log('[Dolet WP] Data_TranslationMemoryRepository::ensureReady error: ' . $e->getMessage());
+                error_log('[Dolet WP] Translation-memory readiness error: ' . $e->getMessage());
             }
         }
 
         if (!$repoReady) {
+            (new Config_DiagnosticsStore())->recordError(
+                'translation_memory_unavailable',
+                $readinessFailure
+            );
             return;
         }
 
@@ -2606,7 +3996,7 @@ final class Routines_Translation implements Routine_RoutineInterface
         $stamper = new Dom_TranslatedStampService();
 
                                                        
-        $translatePre = (bool) get_option(Config_TranslationOptionNames::TRANSLATE_PRE_TEXTAREA, false);
+        $translatePre = Config_OptionValue::boolean(\get_option(Config_TranslationOptionNames::TRANSLATE_PRE_TEXTAREA, false));
 
         $translator = new Translation_Translator(
             $this->languagePair,
@@ -2614,10 +4004,11 @@ final class Routines_Translation implements Routine_RoutineInterface
             $repo,
             $stamper,
             $translatePre,
+            $this->registrationPolicy,
         );
 
                                                       
-        $final = new Routines_TranslateFinalHtml(
+        $final = new Routines_FinalResponseOwner(
             $translator,
             $this->languagePair->getTargetLanguage()->getCode(),
             $this->allTargetCodes,
@@ -2642,7 +4033,9 @@ final class Routines_Translation implements Routine_RoutineInterface
 final class Routines_TranslationWorkerCron implements Routine_RoutineInterface
 {
     private const CRON_HOOK = 'dolet_translation_worker_tick';
-    private const LOCK_KEY  = 'dolet_translation_worker_lock';
+    private const HYGIENE_INTERVAL_SECONDS = 86400;
+    private const HYGIENE_MAX_LIFETIME_SECONDS = 15552000;
+    private const HYGIENE_CORRUPTED_SCAN_LIMIT = 100;
 
     public function __construct(
         private Config_DebugSettingsInterface $debugSettings,
@@ -2711,6 +4104,8 @@ final class Routines_TranslationWorkerCron implements Routine_RoutineInterface
             return;
         }
 
+        $this->runHygieneIfDue();
+
         if (!$engine->isAvailable()) {
             if ($this->debugSettings->isEnabled() && defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
                 error_log('[Dolet WP] Worker tick: SOLE Engine unavailable, skipping.');
@@ -2719,28 +4114,51 @@ final class Routines_TranslationWorkerCron implements Routine_RoutineInterface
             return;
         }
 
-                                                      
-        if (get_transient(self::LOCK_KEY)) {
+        $lease = new Config_OptionLease(
+            Config_WorkerOptionNames::LEASE,
+            Approach_EngineCallPolicy::workerLeaseSeconds(),
+            $diagnosticsStore,
+            'worker_stale_lock_recovered'
+        );
+        if (!$lease->acquire()) {
             return;
         }
-        set_transient(self::LOCK_KEY, 1, 120);
 
         try {
-            $repo = new Data_TranslationMemoryRepository();
+            $retainedIdentityFailures = 0;
+            $representationFailures = 0;
+            $repo = new Data_TranslationMemoryRepository(identityDiagnostics: $diagnosticsStore);
             $repo->ensureReady();
+            if (!$lease->renew()) {
+                throw new \RuntimeException('Worker lease ownership was lost.');
+            }
 
             $worker = new Translation_WorkerService(
                 $repo,
                 $engine,
                 $this->debugSettings,
                 $this->approachSettings,
-                $diagnosticsStore
+                $diagnosticsStore,
+                null,
+                static function () use ($lease): void {
+                    if (!$lease->renew()) {
+                        throw new \RuntimeException('Worker lease ownership was lost.');
+                    }
+                }
             );
 
                                                                      
-            $pollSummary = $worker->pollAndApplyResults();
+            $pollSummary = null;
+            try {
+                $pollSummary = $worker->pollAndApplyResults();
+            } catch (Data_StoredIdentityMismatchExceptionInterface) {
+                $retainedIdentityFailures++;
+            }
+            if (!$lease->renew()) {
+                throw new \RuntimeException('Worker lease ownership was lost.');
+            }
 
-            if ($this->debugSettings->isEnabled() && defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
+            if ($pollSummary !== null && $this->debugSettings->isEnabled() && defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
                 error_log('[Dolet WP] Worker poll summary: ' . wp_json_encode($pollSummary));
             }
 
@@ -2750,17 +4168,35 @@ final class Routines_TranslationWorkerCron implements Routine_RoutineInterface
 
                                                               
             foreach ($targets as $tgtCode) {
+                if (!$lease->renew()) {
+                    throw new \RuntimeException('Worker lease ownership was lost.');
+                }
                 $pair = $this->buildPairOrNull($srcCode, (string)$tgtCode);
                 if ($pair === null) {
                     continue;
                 }
 
                                            
-                $summary = $worker->submitPendingFor($pair, 50);
+                try {
+                    $summary = $worker->submitPendingFor($pair, 50);
+                } catch (Data_PairRepresentationRejectedExceptionInterface) {
+                                                                                      
+                    $representationFailures++;
+                    continue;
+                } catch (Data_StoredIdentityMismatchExceptionInterface) {
+                    $retainedIdentityFailures++;
+                    continue;
+                }
 
                 if ($this->debugSettings->isEnabled() && defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
                     error_log('[Dolet WP] Worker submit summary: ' . wp_json_encode($summary));
                 }
+            }
+            if ($representationFailures > 0) {
+                $diagnosticsStore->recordError('worker_exception', $representationFailures . ' target representation failure(s); independent work continued.');
+            }
+            if ($retainedIdentityFailures > 0) {
+                $diagnosticsStore->recordError('worker_exception', $retainedIdentityFailures . ' identity failure(s) retained; independent work continued.');
             }
         } catch (\Throwable $e) {
             if ($this->debugSettings->isEnabled() && defined('WP_DEBUG_LOG') && WP_DEBUG_LOG) {
@@ -2768,7 +4204,43 @@ final class Routines_TranslationWorkerCron implements Routine_RoutineInterface
             }
             $diagnosticsStore->recordError('worker_exception', $e->getMessage());
         } finally {
-            delete_transient(self::LOCK_KEY);
+            $lease->release();
+        }
+    }
+
+    private function runHygieneIfDue(): void
+    {
+        $now = \time();
+        $lastRun = (int) \get_option(Config_HygieneOptionNames::LAST_RUN, 0);
+        if ($lastRun > $now - self::HYGIENE_INTERVAL_SECONDS) {
+            return;
+        }
+
+                                                                             
+                                                                             
+        if ($lastRun === 0) {
+            if (!\add_option(Config_HygieneOptionNames::LAST_RUN, $now, '', false)) {
+                return;
+            }
+        } else {
+            \update_option(Config_HygieneOptionNames::LAST_RUN, $now, false);
+        }
+
+        try {
+            $repo = new Data_TranslationMemoryRepository(identityDiagnostics: new Config_DiagnosticsStore());
+            $repo->ensureReady();
+            $counts = $repo->runHygiene(
+                $now,
+                self::HYGIENE_MAX_LIFETIME_SECONDS,
+                0,
+                self::HYGIENE_CORRUPTED_SCAN_LIMIT
+            );
+            \update_option(Config_HygieneOptionNames::LAST_COUNTS, $counts, false);
+        } catch (\Throwable $e) {
+                                                                         
+                                                                 
+            \delete_option(Config_HygieneOptionNames::LAST_RUN);
+            (new Config_DiagnosticsStore())->recordError('hygiene_failed', $e->getMessage());
         }
     }
 
@@ -2828,9 +4300,14 @@ final class Routines_LanguagePairResolver
         }
 
                                                                                
-                                                                          
+                                                                                
+                                                                               
         if (array_key_exists($code, Language_Constants::getAllLanguages())) {
-            return $optionFactory->fromCodeElseNull($code, null);
+            $customizations = $langAdmin->getCustomizations();
+            $note = isset($customizations[$code]['note'])
+                ? (string) $customizations[$code]['note']
+                : null;
+            return $optionFactory->fromCodeElseNull($code, $note);
         }
 
                                                                                

@@ -12,7 +12,6 @@
     description: config.description,
     attributes: {
       showCodes: { type: 'boolean', default: true },
-      showInterlingua: { type: 'boolean', default: true },
       wrapperClass: { type: 'string', default: 'dolet-lang-menu' }
     },
     supports: { html: false },
@@ -24,11 +23,6 @@
               label: config.showCodes,
               checked: props.attributes.showCodes,
               onChange: function (value) { props.setAttributes({ showCodes: value }); }
-            }),
-            el(ToggleControl, {
-              label: config.showInterlingua,
-              checked: props.attributes.showInterlingua,
-              onChange: function (value) { props.setAttributes({ showInterlingua: value }); }
             }),
             el(TextControl, {
               label: config.wrapperClass,

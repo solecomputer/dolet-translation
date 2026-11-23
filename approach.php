@@ -125,12 +125,12 @@ interface Approach_SparseMapCodecInterface
     public function encodeSparseMapJson(array $map): ?string;
 
        
-                                                                                    
-                                             
+                                                                        
+                                                                      
       
                                                      
       
-                                                                    
+                                                                 
       
                  
                                                                            
@@ -383,7 +383,7 @@ final class Approach_ArrayNormalizer implements Approach_ArrayNormalizerInterfac
 final class Approach_PollResult implements Approach_PollResultInterface
 {
        
-                                                 
+                                              
        
     public function __construct(
         private bool $pending,
@@ -539,13 +539,16 @@ final class Approach_SoleEngineClient implements Approach_SoleEngineClientInterf
 {
     private Approach_SparseMapCodecInterface $codec;
     private Approach_TranslationWireProjectorInterface $wireProjector;
+    private Approach_EngineCallPolicy $engineCallPolicy;
 
     public function __construct(
         ?Approach_SparseMapCodecInterface $codec = null,
-        ?Approach_TranslationWireProjectorInterface $wireProjector = null
+        ?Approach_TranslationWireProjectorInterface $wireProjector = null,
+        ?Approach_EngineCallPolicy $engineCallPolicy = null
     ) {
         $this->codec = $codec ?? new Approach_SparseMapCodec();
         $this->wireProjector = $wireProjector ?? new Approach_TranslationWireProjector($this->codec);
+        $this->engineCallPolicy = $engineCallPolicy ?? new Approach_EngineCallPolicy();
     }
 
     public function isAvailable(): bool
@@ -571,11 +574,14 @@ final class Approach_SoleEngineClient implements Approach_SoleEngineClientInterf
 
         try {
                                                              
-            $ticket = sole_engine_llm()->submit(
-                'dolet-wp',
-                'translate_batch',
-                $wire->getPayloadJson(),
-                $wire->getOptions()
+            $ticket = $this->engineCallPolicy->invoke(
+                static fn () => sole_engine_llm()->submit(
+                    'dolet-wp',
+                    'translate_batch',
+                    $wire->getPayloadJson(),
+                    $wire->getOptions()
+                ),
+                new Config_DiagnosticsStore()
             );                             
         } catch (\Throwable $e) {
             return new Approach_SubmitResult(false, null, 'SOLE Engine submit error: ' . $e->getMessage());
@@ -596,7 +602,10 @@ final class Approach_SoleEngineClient implements Approach_SoleEngineClientInterf
 
         try {
                                                               
-            $reply = sole_engine_llm()->getResult($jobId);
+            $reply = $this->engineCallPolicy->invoke(
+                static fn () => sole_engine_llm()->getResult($jobId),
+                new Config_DiagnosticsStore()
+            );
         } catch (\Throwable $e) {
             return new Approach_PollResult(false, false, 'SOLE Engine poll error: ' . $e->getMessage(), []);
         }
@@ -621,6 +630,148 @@ final class Approach_SoleEngineClient implements Approach_SoleEngineClientInterf
         }
 
         return new Approach_PollResult(false, true, null, $parsed);
+    }
+}
+
+   
+                                                                        
+  
+                                                                            
+                                                                            
+                                                                              
+   
+final class Approach_EngineCallPolicy
+{
+    public const MAX_SECONDS = 30;
+    public const RENEWAL_SLACK_SECONDS = 30;
+
+                                
+    private \Closure $clock;
+                                                         
+    private \Closure $frameReader;
+    private int $activeCalls = 0;
+
+    public function __construct(?callable $clock = null, ?callable $frameReader = null)
+    {
+        $this->clock = $clock !== null
+            ? \Closure::fromCallable($clock)
+            : static fn (): float => \microtime(true);
+        $this->frameReader = $frameReader !== null
+            ? \Closure::fromCallable($frameReader)
+            : static fn (): array => \debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS);
+    }
+
+       
+                  
+                                 
+                
+       
+    public function invoke(callable $call, ?Diagnostics_StoreInterface $diagnostics = null): mixed
+    {
+        $startedAt = ($this->clock)();
+        $outermost = $this->activeCalls === 0;
+        $this->activeCalls++;
+        if ($outermost) {
+            \add_filter('http_request_args', [$this, 'boundHttpArgs'], PHP_INT_MAX, 2);
+        }
+
+        try {
+            return $call();
+        } finally {
+            $this->activeCalls--;
+            if ($outermost) {
+                \remove_filter('http_request_args', [$this, 'boundHttpArgs'], PHP_INT_MAX);
+            }
+            $duration = ($this->clock)() - $startedAt;
+            if ($duration > self::MAX_SECONDS && $diagnostics !== null) {
+                $diagnostics->recordError(
+                    'engine_http_duration_exceeded',
+                    \sprintf(
+                        'A Dolet Engine call lasted %.3f seconds; the HTTP timeout bound is %d seconds.',
+                        $duration,
+                        self::MAX_SECONDS
+                    )
+                );
+            }
+        }
+    }
+
+       
+                                       
+                                  
+       
+    public function boundHttpArgs(array $args, string $url = ''): array
+    {
+        unset($url);
+        if ($this->activeCalls === 0) {
+            return $args;
+        }
+        return $this->classifyHttpArgsForFrames($args, ($this->frameReader)());
+    }
+
+       
+                                                                          
+      
+                                       
+                                                    
+                                  
+       
+    public function classifyHttpArgsForFrames(array $args, array $frames): array
+    {
+        $wrappers = [
+            'wp_remote_get',
+            'wp_remote_post',
+            'wp_remote_request',
+            'wp_remote_head',
+            'wp_safe_remote_get',
+            'wp_safe_remote_post',
+            'wp_safe_remote_request',
+            'wp_safe_remote_head',
+        ];
+        $coreMethods = ['request', 'get', 'post', 'head'];
+        foreach ($frames as $index => $frame) {
+            $function = $frame['function'] ?? null;
+            $class = $frame['class'] ?? null;
+            $isCoreRequest = $class === 'WP_Http' && $function === 'request';
+            if (!$isCoreRequest && !\in_array($function, $wrappers, true)) {
+                continue;
+            }
+
+            $callerIndex = $index + 1;
+            while (isset($frames[$callerIndex])) {
+                $callerClass = $frames[$callerIndex]['class'] ?? null;
+                $callerFunction = $frames[$callerIndex]['function'] ?? null;
+                if ($callerClass === 'WP_Http' && \in_array($callerFunction, $coreMethods, true)) {
+                    $callerIndex++;
+                    continue;
+                }
+                if ($callerClass === null && \in_array($callerFunction, $wrappers, true)) {
+                    $callerIndex++;
+                    continue;
+                }
+                break;
+            }
+
+            $caller = $frames[$callerIndex] ?? [];
+            $class = $caller['class'] ?? null;
+            $method = $caller['function'] ?? null;
+            if ($class !== 'SoleEngineWP\\Http_Client'
+                || ($method !== 'getJson' && $method !== 'postJson')) {
+                return $args;
+            }
+            $existing = $args['timeout'] ?? null;
+            $args['timeout'] = is_numeric($existing) && (float)$existing > 0
+                ? \min((float)$existing, (float)self::MAX_SECONDS)
+                : (float)self::MAX_SECONDS;
+            $args['redirection'] = 0;
+            return $args;
+        }
+        return $args;
+    }
+
+    public static function workerLeaseSeconds(): int
+    {
+        return Config_WorkerOptionNames::LEASE_SECONDS;
     }
 }
 
@@ -765,7 +916,7 @@ final class Approach_SparseMapCodec implements Approach_SparseMapCodecInterface
             }
 
                                                                 
-            $out[(string)$k] = $v;
+            $out[$k] = $v;
         }
 
         return $out;

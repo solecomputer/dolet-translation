@@ -89,8 +89,8 @@ final class UiWebmaster_DebugToggleView implements UiWebmaster_DebugToggleViewIn
         $checked = $this->checked ? 'checked' : '';
         $name    = esc_attr($this->optionName);
 
-        return '<div style="margin-top:1.25rem;padding-top:.75rem;border-top:1px solid #eee;">'
-            . '<label style="display:inline-flex;gap:.5rem;align-items:center;">'
+        return '<div class="dolet-settings-toggle">'
+            . '<label class="dolet-settings-toggle-label">'
             . '<input type="checkbox" name="' . $name . '" value="1" ' . $checked . '>'
             . '<span>' . $this->labelHtml . '</span>'
             . '</label></div>';
@@ -124,7 +124,7 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
     private bool   $sourceIsSite        = false;
     private bool   $sourceIsSpecific    = false;
     private string $siteCode            = '';
-                                    
+                                       
     private array $catalogNoOriginal    = [];
 
                        
@@ -132,13 +132,12 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
     private string $sourceDisplayCode      = 'original';
     private string $sourceDefaultName      = '';
     private string $sourceCurrentName      = '';
-    private string $sourceCurrentNote      = '';
 
               
                         
     private array  $targetsSorted            = [];
     private string $customizationsOptionName = '';                                                      
-                                    
+                                       
     private array  $catalogForDefaults       = [];
     private string $targetsFieldName         = '';                                               
 
@@ -242,7 +241,7 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
     }
 
        
-                                           
+                                              
        
     public function setCatalogNoOriginal(array $catalog): void
     {
@@ -273,11 +272,6 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
         $this->sourceCurrentName = $name;
     }
 
-    public function setSourceCurrentNote(string $note): void
-    {
-        $this->sourceCurrentNote = $note;
-    }
-
                                                                              
               
                                                                              
@@ -301,7 +295,7 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
     }
 
        
-                                           
+                                              
        
     public function setCatalogForDefaults(array $catalog): void
     {
@@ -385,6 +379,7 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
                                  
         $optionsHtml = '';
         foreach ($this->catalogNoOriginal as $code => $name) {
+            $code = (string) $code;
             $sel    = ($this->sourceIsSpecific && $this->sourceHiddenValue === $code) ? ' selected' : '';
             $codeA  = self::a($code);
             $label  = self::e($code . ' — ' . $name);
@@ -417,8 +412,8 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
             if (!is_array($row)) {
                 continue;
             }
-            $name = isset($row['name']) ? (string) $row['name'] : '';
-            $note = isset($row['note']) ? (string) $row['note'] : '';
+            $name = isset($row['name']) && \is_string($row['name']) ? $row['name'] : '';
+            $note = isset($row['note']) && \is_string($row['note']) ? $row['note'] : '';
             $r    = [];
             if (trim($name) !== '') {
                 $r['name'] = $name;
@@ -456,11 +451,11 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
 
             $targetRows .= '<tr data-code="' . $codeA . '">'
                 . '<td><code>' . $codeA . '</code></td>'
-                . '<td><input type="text" style="width:100%" name="' . $nameFieldA
+                . '<td><input type="text" class="dolet-field-input" name="' . $nameFieldA
                 . '" value="' . $valueNameA . '" placeholder="' . $placeholderName . '"></td>'
-                . '<td><input type="text" style="width:100%" name="' . $noteFieldA
+                . '<td><input type="text" class="dolet-field-input" name="' . $noteFieldA
                 . '" value="' . $valueNoteA . '" placeholder="' . $notePlaceholderA . '"></td>'
-                . '<td style="width:80px;"><button type="button" class="button link-delete dolet-remove-row">×</button></td>'
+                . '<td class="dolet-remove-column"><button type="button" class="button link-delete dolet-remove-row">×</button></td>'
                 . '</tr>';
         }
 
@@ -509,14 +504,22 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
         $labelAdd     = self::e($this->labelAddCustom ?? 'Add custom language');
 
         $hintSource = $this->hintSource
-            ? '<p style="margin:.25rem 0 1rem;opacity:.8">' . self::e($this->hintSource) . '</p>'
+            ? '<p class="dolet-builder-hint">' . self::e($this->hintSource) . '</p>'
             : '';
 
         $hintTargets = $this->hintTargets
-            ? '<p style="margin:.25rem 0 1rem;opacity:.8">' . self::e($this->hintTargets) . '</p>'
+            ? '<p class="dolet-builder-hint">' . self::e($this->hintTargets) . '</p>'
             : '';
 
         $placeholder = self::a($this->placeholderSearch ?? Core_Strings::get('search_placeholder'));
+        $searchLabelE = self::e(Core_Strings::get('search_label'));
+        $chooserSummaryE = self::e(Core_Strings::get('choose_languages_summary'));
+        $noTargetsE = self::e(Core_Strings::get('no_targets_selected'));
+        $noTargetsA = self::a(Core_Strings::get('no_targets_selected'));
+        $targetTableClassA = $targetRows === '' ? 'widefat striped is-empty' : 'widefat striped';
+        $targetEmptyRow = $targetRows === ''
+            ? '<tr data-dolet-empty-targets><td colspan="4" class="dolet-empty-targets">' . $noTargetsE . '</td></tr>'
+            : '';
 
         $sourceHiddenNameA = self::a($this->sourceHiddenName);
         $sourceHiddenValA  = self::a($this->sourceHiddenValue);
@@ -526,7 +529,6 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
         $srcDisplayCodeA   = self::a($this->sourceDisplayCode);
         $srcDefaultA       = self::a($this->sourceDefaultName);
         $srcNameValA       = self::a($this->sourceCurrentName);
-        $srcNoteValA       = self::a($this->sourceCurrentNote);
         $targetsHolderIdA  = self::a($this->targetsHolderDomId);
 
         $strOriginalE      = self::e(Core_Strings::get('original_option'));
@@ -540,8 +542,6 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
         $strNotePlaceholderA = self::a(Core_Strings::get('note_placeholder'));
         $strSpecifySourceE   = self::e(Core_Strings::get('specify_source_option'));
         $strSrcNameLabelE    = self::e(Core_Strings::get('source_display_name_label'));
-        $strSrcNoteLabelE    = self::e(Core_Strings::get('source_note_label'));
-        $strSrcNotePlaceholderA = self::a(Core_Strings::get('source_note_placeholder'));
 
         return strtr(<<<'HTML'
 <div id="dolet-builder-root"
@@ -549,79 +549,79 @@ final class UiWebmaster_LanguagesBuilderView implements UiWebmaster_LanguagesBui
      data-custom-list-option="{$rootDataA['customListOption']}"
      data-targets-holder-id="{$rootDataA['targetsHolderId']}"
      data-targets-field="{$rootDataA['targetsField']}"
-     data-str-note-placeholder="{$strNotePlaceholderA}">
+     data-str-note-placeholder="{$strNotePlaceholderA}"
+     data-str-no-targets="{$noTargetsA}">
 
-  <div class="card" style="margin:1rem 0;padding:1rem;">
-    <h3 style="margin:.2rem 0 1rem;">{$labelSource}</h3>
+  <div class="card dolet-builder-card">
+    <h3 class="dolet-builder-heading">{$labelSource}</h3>
     {$hintSource}
     <input type="hidden" id="dolet_source_code" name="{$sourceHiddenNameA}" value="{$sourceHiddenValA}">
-    <div style="display:flex;flex-direction:column;gap:.5rem;">
-      <label style="display:flex;align-items:center;gap:.5rem;">
+    <div class="dolet-source-options">
+      <label class="dolet-source-choice">
         <input type="radio" name="dolet_source_mode" value="original" {$sourceCheckedOriginal}>
-        <span><strong>{$strOriginalE}</strong> <span style="opacity:.7;">({$strOriginalHintE})</span></span>
+        <span><strong>{$strOriginalE}</strong> <span class="dolet-builder-muted">({$strOriginalHintE})</span></span>
       </label>
-      <label style="display:flex;align-items:center;gap:.5rem;">
+      <label class="dolet-source-choice">
         <input type="radio" name="dolet_source_mode" value="site" data-site-code="{$siteCodeA}" {$siteDisabled} {$sourceCheckedSite}>
-        <span><strong>{$strSiteLangE}</strong> <span style="opacity:.7;">({$siteLabelE})</span></span>
+        <span><strong>{$strSiteLangE}</strong> <span class="dolet-builder-muted">({$siteLabelE})</span></span>
       </label>
-      <div style="display:flex;align-items:center;gap:.5rem;">
-        <label style="display:flex;align-items:center;gap:.5rem;margin:0;">
+      <div class="dolet-source-specific">
+        <label class="dolet-source-choice dolet-source-choice-specific">
           <input type="radio" name="dolet_source_mode" value="specific" {$sourceCheckedSpecific}>
           <span><strong>{$strSpecifySourceE}</strong></span>
         </label>
-        <select id="dolet-source-select" style="min-width:260px;">
+        <select id="dolet-source-select" class="dolet-source-select">
           <option value="">{$strSelectDefaultE}</option>
           {$optionsHtml}
         </select>
       </div>
     </div>
-    <div style="margin-top:.75rem;display:grid;grid-template-columns:1fr 1fr;gap:.75rem;max-width:880px;">
+    <div class="dolet-source-fields">
       <div>
-        <label style="display:block;margin-bottom:.25rem;">{$strSrcNameLabelE}</label>
-        <input type="text" style="width:100%" id="dolet-source-name"
+        <label class="dolet-field-label">{$strSrcNameLabelE}</label>
+        <input type="text" class="dolet-field-input" id="dolet-source-name"
                data-field-base="{$customFieldBaseA}"
                name="{$customFieldBaseA}[{$srcDisplayCodeA}][name]"
                value="{$srcNameValA}" placeholder="{$srcDefaultA}">
       </div>
-      <div>
-        <label style="display:block;margin-bottom:.25rem;">{$strSrcNoteLabelE}</label>
-        <input type="text" style="width:100%" id="dolet-source-note"
-               data-field-base="{$customFieldBaseA}"
-               name="{$customFieldBaseA}[{$srcDisplayCodeA}][note]"
-               value="{$srcNoteValA}" placeholder="{$strSrcNotePlaceholderA}">
-      </div>
     </div>
   </div>
 
-  <div class="card" style="margin:1rem 0;padding:1rem;">
-    <h3 style="margin:.2rem 0 1rem;">{$labelTargets}</h3>
+  <div class="card dolet-builder-card">
+    <h3 class="dolet-builder-heading">{$labelTargets}</h3>
     {$hintTargets}
     <div id="{$targetsHolderIdA}"></div>
     {$customHidden}
-    <table class="widefat striped" id="dolet-active-table">
+    <table id="dolet-active-table" class="{$targetTableClassA}">
       <thead><tr><th>{$strColCodeE}</th><th>{$strColNameE}</th><th>{$strColNoteE}</th><th>{$strColRemoveE}</th></tr></thead>
       <tbody>
         {$targetRows}
+        {$targetEmptyRow}
       </tbody>
     </table>
   </div>
 
-  <div style="margin:.5rem 0 1rem;">
+  <div class="dolet-builder-actions">
     <button type="button" class="button" id="dolet-add-custom">{$labelAdd}</button>
   </div>
 
-  <div class="card" style="margin:1rem 0;padding:1rem;">
-    <h3 style="margin:.2rem 0 .75rem;">{$labelPalette}</h3>
-    <input type="text" id="dolet-filter" placeholder="{$placeholder}" style="width:100%;max-width:420px;margin:0 0 .75rem;">
-    <div id="dolet-palette" style="display:flex;flex-wrap:wrap;gap:.5rem;max-height:300px;overflow:auto;">
-      {$paletteButtons}
-    </div>
+  <div class="card dolet-builder-card">
+    <h3 class="dolet-builder-heading dolet-builder-heading-compact">{$labelPalette}</h3>
+    <details class="dolet-language-chooser">
+      <summary>{$chooserSummaryE}</summary>
+      <label for="dolet-filter" class="dolet-field-label">{$searchLabelE}</label>
+      <input type="search" id="dolet-filter" class="dolet-palette-filter" placeholder="{$placeholder}" aria-controls="dolet-palette" autocomplete="off">
+      <div id="dolet-palette" class="dolet-palette">
+        {$paletteButtons}
+      </div>
+    </details>
   </div>
 </div>
 HTML,
             [
                 '{$customFieldBaseA}' => $customFieldBaseA,
                 '{$customHidden}' => $customHidden,
+                '{$chooserSummaryE}' => $chooserSummaryE,
                 '{$hintSource}' => $hintSource,
                 '{$hintTargets}' => $hintTargets,
                 '{$labelAdd}' => $labelAdd,
@@ -631,6 +631,8 @@ HTML,
                 '{$optionsHtml}' => $optionsHtml,
                 '{$paletteButtons}' => $paletteButtons,
                 '{$placeholder}' => $placeholder,
+                '{$noTargetsA}' => $noTargetsA,
+                '{$searchLabelE}' => $searchLabelE,
                 '{$rootDataA[\'customListOption\']}' => $rootDataA['customListOption'],
                 '{$rootDataA[\'customizationsOption\']}' => $rootDataA['customizationsOption'],
                 '{$rootDataA[\'targetsField\']}' => $rootDataA['targetsField'],
@@ -646,7 +648,6 @@ HTML,
                 '{$srcDefaultA}' => $srcDefaultA,
                 '{$srcDisplayCodeA}' => $srcDisplayCodeA,
                 '{$srcNameValA}' => $srcNameValA,
-                '{$srcNoteValA}' => $srcNoteValA,
                 '{$strColCodeE}' => $strColCodeE,
                 '{$strColNameE}' => $strColNameE,
                 '{$strColNoteE}' => $strColNoteE,
@@ -658,9 +659,9 @@ HTML,
                 '{$strSiteLangE}' => $strSiteLangE,
                 '{$strSpecifySourceE}' => $strSpecifySourceE,
                 '{$strSrcNameLabelE}' => $strSrcNameLabelE,
-                '{$strSrcNoteLabelE}' => $strSrcNoteLabelE,
-                '{$strSrcNotePlaceholderA}' => $strSrcNotePlaceholderA,
                 '{$targetRows}' => $targetRows,
+                '{$targetEmptyRow}' => $targetEmptyRow,
+                '{$targetTableClassA}' => $targetTableClassA,
                 '{$targetsHolderIdA}' => $targetsHolderIdA,
             ]
         );

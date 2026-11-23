@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name:       Dolet AI Translation
- * Plugin URI:        https://sole.computer/wordpress/dolet/
+ * Plugin Name:       Sole Translation
+ * Plugin URI:        https://sole.computer/
  * Description:       Context-aware AI translation for WordPress via SOLE Engine.
- * Version:           1.0.0
+ * Version:           1.0.2
  * Requires at least: 6.5
  * Requires PHP:      8.3
  * Author:            Sole Computer
@@ -27,8 +27,6 @@ require_once __DIR__ . '/core.php';
                                                                             
 
 register_activation_hook(__FILE__, static function (): void {
-    Config_InstallationState::recordActivation();
-
                                                                              
                                                                             
                                                             

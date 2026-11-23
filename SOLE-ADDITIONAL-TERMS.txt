@@ -3,7 +3,7 @@ SOLE Additional Terms under GNU AGPLv3 Section 7
 
 Copyright (C) 2026 Sole Computer.
 
-Dolet AI Translation remains licensed AGPL-3.0-only. These terms use only the
+Sole Translation remains licensed AGPL-3.0-only. These terms use only the
 permissions in GNU AGPLv3 Section 7 and do not change the rights granted by
 that license. This notice does not impose any further restriction.
 
